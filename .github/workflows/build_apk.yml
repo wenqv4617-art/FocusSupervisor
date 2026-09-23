@@ -39,10 +39,31 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: 配置 Android SDK
-        # runner 上虽有预装 SDK，但这一步会补全 cmdline-tools 并接受 license，
-        # 使 AGP 在缺少 platforms/build-tools 时能自动下载，避免环境差异导致红。
-        uses: android-actions/setup-android@v3
+      - name: 准备 Android SDK
+        # 不引 android-actions/setup-android：它默认会去装早已从 SDK 下线的
+        # `tools` 包，直接让这一步失败。ubuntu-latest 镜像已经预装了 SDK、
+        # build-tools 和已接受的 license，这里只做两件事：
+        #   1) 把环境打印出来，方便出问题时定位；
+        #   2) 万一少了 android-35，就地补装 —— 失败也不中断，留给 AGP
+        #      自己的 sdkDownload 兜底。
+        run: |
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          echo "ANDROID_HOME=$SDK"
+          echo "--- 现有 platforms ---"; ls "$SDK/platforms" 2>/dev/null || echo "(空)"
+          echo "--- 现有 build-tools ---"; ls "$SDK/build-tools" 2>/dev/null || echo "(空)"
+
+          if [ ! -d "$SDK/platforms/android-35" ] || [ ! -d "$SDK/build-tools/35.0.0" ]; then
+            SDKMGR="$(ls -d "$SDK"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | tail -1)"
+            if [ -n "$SDKMGR" ]; then
+              echo "用 $SDKMGR 安装 platforms;android-35 与 build-tools;35.0.0"
+              yes | "$SDKMGR" --licenses > /dev/null 2>&1 || true
+              "$SDKMGR" "platforms;android-35" "build-tools;35.0.0" || true
+            else
+              echo "未找到 sdkmanager，交给 AGP 自动下载"
+            fi
+          fi
+
+          echo "--- 最终 platforms ---"; ls "$SDK/platforms" 2>/dev/null || true
 
       - name: 配置 Gradle 缓存
         uses: gradle/actions/setup-gradle@v4
