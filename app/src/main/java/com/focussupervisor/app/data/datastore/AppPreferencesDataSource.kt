@@ -256,9 +256,11 @@ class AppPreferencesDataSource(context: Context) {
      */
     suspend fun replaceIndex(documents: List<IndexedDocument>) {
         dataStore.edit { prefs ->
-            prefs[KEY_MEMORY_INDEX] = PreferencesCodec.encodeIndex(
-                documents.take(MemoryDefaults.MAX_INDEX_DOCUMENTS),
-            )
+            // 刻意**不在这里截断**：索引的淘汰策略是「先丢最旧的对话原文、记忆条目
+            // 只在超过自己上限时才丢」，那是一个跨字段的判断，实现在
+            // `MemoryRepository.enforceIndexLimit` 里。在这一层用 take(n) 简单砍尾巴
+            // 会把两边的策略变成两套，而且砍掉的可能是记忆条目。
+            prefs[KEY_MEMORY_INDEX] = PreferencesCodec.encodeIndex(documents)
         }
     }
 

@@ -545,4 +545,14 @@ class AiConfigViewModel(application: Application) : AndroidViewModel(application
         is AiClientException -> throwable.message ?: "请求失败"
         else -> throwable.message?.takeIf { it.isNotBlank() } ?: "请求失败：${throwable.javaClass.simpleName}"
     }
+
+    private companion object {
+        /**
+         * 前置提示的长度上限。
+         *
+         * 8000 字符大致相当于 4000 token，已经是一段很长的设定了。再往上加，
+         * 注入内容会把记忆与待办的上下文预算挤光 —— 那才是真正的损失。
+         */
+        const val MAX_PRE_PROMPT_LENGTH = 8000
+    }
 }

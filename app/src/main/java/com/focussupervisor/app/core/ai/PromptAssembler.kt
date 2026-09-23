@@ -1,5 +1,6 @@
 package com.focussupervisor.app.core.ai
 
+import com.focussupervisor.app.core.network.ChatTurn
 import com.focussupervisor.app.domain.model.AiCommandLimits
 import com.focussupervisor.app.domain.model.AiPersona
 import com.focussupervisor.app.domain.model.ChatMessage
