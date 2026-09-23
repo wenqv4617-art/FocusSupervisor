@@ -8,6 +8,7 @@ import com.focussupervisor.app.data.repository.ConversationRepository
 import com.focussupervisor.app.data.repository.MemoryRepository
 import com.focussupervisor.app.data.repository.PersonaRepository
 import com.focussupervisor.app.data.repository.TextEmbedder
+import com.focussupervisor.app.data.repository.TimelineRepository
 import com.focussupervisor.app.domain.model.AiCommand
 import com.focussupervisor.app.domain.model.AiCommandLimits
 import com.focussupervisor.app.domain.model.ChatMessage
@@ -71,6 +72,7 @@ class ConversationEngine(
     private val conversation: ConversationRepository,
     private val personas: PersonaRepository,
     private val aiConfig: AiConfigRepository,
+    private val timeline: TimelineRepository,
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
 
@@ -103,6 +105,14 @@ class ConversationEngine(
         try {
             // ---- 1. 用户消息先落库。哪怕后面网络失败，这句话也已经记下来了。----
             phase = "保存消息"
+
+            // 上一次对话的时间必须在**插入这条消息之前**取，否则取到的就是刚写进去的这条。
+            // 它是提示词里「距上一次对话 X」的来源 —— 断了两小时和断了三天，
+            // 监督者该说的话完全不同。
+            val previousUserMessageMillis = conversation.messages.value
+                .lastOrNull { it.sender == MessageSender.USER }
+                ?.timestampMillis
+
             conversation.append(
                 ChatMessage(
                     id = newId(MessageSender.USER),
@@ -142,6 +152,9 @@ class ConversationEngine(
                 recalledConversation = recalled.conversationSnippets,
                 todos = policy.todos.value,
                 whitelist = policy.whitelist.value,
+                timeline = timeline.events.value,
+                history = conversation.messages.value,
+                lastInteractionMillis = previousUserMessageMillis,
                 nowMillis = now,
             )
 

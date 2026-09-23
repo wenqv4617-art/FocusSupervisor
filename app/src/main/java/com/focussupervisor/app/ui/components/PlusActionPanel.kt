@@ -82,6 +82,7 @@ object ActionIds {
     const val PERSONA_MANAGE = "persona_manage"
     const val MEMORY_MANAGE = "memory_manage"
     const val EMBEDDING_CONFIG = "embedding_config"
+    const val TIMELINE = "timeline"
     const val GAZE_MONITOR = "gaze_monitor"
     const val AI_CONFIG = "ai_config"
 }
@@ -238,6 +239,11 @@ fun defaultActionItems(needsPermissionAttention: Boolean = false): List<ActionIt
         id = ActionIds.POLICY_STATUS,
         label = "待办与白名单",
         icon = Icons.AutoMirrored.Outlined.List,
+    ),
+    ActionItem(
+        id = ActionIds.TIMELINE,
+        label = "时间线",
+        icon = Icons.Outlined.DateRange,
     ),
     ActionItem(
         id = ActionIds.PERSONA_MANAGE,

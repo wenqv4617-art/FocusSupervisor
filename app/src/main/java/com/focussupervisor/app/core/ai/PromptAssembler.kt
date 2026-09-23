@@ -1,5 +1,6 @@
 package com.focussupervisor.app.core.ai
 
+import com.focussupervisor.app.core.time.TimeNarrator
 import com.focussupervisor.app.core.network.ChatTurn
 import com.focussupervisor.app.domain.model.AiCommandLimits
 import com.focussupervisor.app.domain.model.AiPersona
@@ -7,6 +8,8 @@ import com.focussupervisor.app.domain.model.ChatMessage
 import com.focussupervisor.app.domain.model.MemoryEntry
 import com.focussupervisor.app.domain.model.MessageSender
 import com.focussupervisor.app.domain.model.PersonaPair
+import com.focussupervisor.app.domain.model.TimelineDefaults
+import com.focussupervisor.app.domain.model.TimelineEvent
 import com.focussupervisor.app.domain.model.TodoItem
 import com.focussupervisor.app.domain.model.UserPersona
 import com.focussupervisor.app.domain.model.WhitelistApp
@@ -15,7 +18,7 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
 /**
- * 把「人设 + 前置提示 + 记忆 + 待办 + 白名单现状 + 指令协议」拼成一段系统提示词。
+ * 把「人设 + 前置提示 + 记忆 + 待办 + 白名单现状 + 近况 + 时间 + 指令协议」拼成一段系统提示词。
  *
  * ===========================================================================
  * 顺序就是优先级
@@ -31,8 +34,13 @@ import java.time.format.DateTimeFormatter
  *   8. 当前待办
  *   9. 白名单现状
  *  10. 可用指令协议
- *  11. 当前时间
+ *  11. 最近发生的事情    ← 带时间的系统事件（拦截、放行、待办、改写消息…）
+ *  12. 现在              ← 绝对时间、距上次对话、今天说了多少、今天发生了什么
+ *  13. 时间感            ← 上面这些时间该怎么用
  * ```
+ *
+ * 对话本身也带时间：每一轮消息前面都会加上它发生的时间（见 [buildTurns]）。
+ * 没有这一层，整段历史在模型眼里就是「刚刚连续发生的」。
  * 这不是随意排的：**越靠前的内容，模型越会当成不可协商的前提**。所以用户的
  * 前置提示必须在第 1 位（哪怕它和人设冲突，也该按用户写的来），而指令协议这种
  * 「工具说明」放最后，因为它需要被读到，但不需要被当成身份认同。
@@ -51,10 +59,6 @@ object PromptAssembler {
 
     private val TIME_FORMATTER: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
 
-    private val WEEKDAY_LABELS = arrayOf(
-        "周一", "周二", "周三", "周四", "周五", "周六", "周日",
-    )
-
     /**
      * 构造 system 提示词。
      *
@@ -71,6 +75,9 @@ object PromptAssembler {
         recalledConversation: List<String>,
         todos: List<TodoItem>,
         whitelist: List<WhitelistApp>,
+        timeline: List<TimelineEvent>,
+        history: List<ChatMessage>,
+        lastInteractionMillis: Long?,
         nowMillis: Long,
     ): String = buildString {
         // ---- 1. 前置提示（位置最靠前，逐字原样，不做任何加工）----
@@ -124,9 +131,70 @@ object PromptAssembler {
         // ---- 10. 指令协议 ----
         appendLine(COMMAND_PROTOCOL)
 
-        // ---- 11. 当前时间 ----
+        // ---- 11. 最近发生了什么（带时间的证据）----
+        appendSituationSection(timeline, nowMillis)
+
+        // ---- 12. 现在 ----
+        appendTimeSection(history, timeline, lastInteractionMillis, nowMillis)
+
+        // ---- 13. 怎么用这些时间 ----
+        appendLine(TIME_PROTOCOL)
+    }
+
+    /**
+     * 近况：把带时间的事件按倒序拼进来。
+     *
+     * 没有事件时**整段省略**。宁可少一段，也不要出现「最近没有发生任何事」这种
+     * 占着上下文、信息量为零的句子。
+     */
+    private fun StringBuilder.appendSituationSection(
+        timeline: List<TimelineEvent>,
+        nowMillis: Long,
+    ) {
+        val horizonMillis = TimelineDefaults.PROMPT_HORIZON_HOURS * 3_600_000L
+        val recent = timeline
+            .filter { it.atMillis >= nowMillis - horizonMillis }
+            .sortedByDescending { it.atMillis }
+            .take(TimelineDefaults.PROMPT_EVENT_LIMIT)
+
+        if (recent.isEmpty()) return
+
+        appendLine("# 最近发生的事（倒序）")
+        appendLine("以下是系统真实记录下来的事件，不是你的推测：")
+        recent.forEach { event ->
+            appendLine("- ${TimeNarrator.describeForPrompt(event, nowMillis)}")
+        }
+        appendLine()
+    }
+
+    /**
+     * 「现在」这一段：绝对时间、距上次对话多久、今天说了多少、今天发生了什么。
+     *
+     * 每一项都只在有值时才写出来 —— 空项会让这一段从「信息」退化成「格式」。
+     */
+    private fun StringBuilder.appendTimeSection(
+        history: List<ChatMessage>,
+        timeline: List<TimelineEvent>,
+        lastInteractionMillis: Long?,
+        nowMillis: Long,
+    ) {
         appendLine("# 现在")
-        appendLine(formatNow(nowMillis))
+        appendLine(TimeNarrator.describeNow(nowMillis))
+
+        lastInteractionMillis?.let { last ->
+            appendLine("距上一次对话：${TimeNarrator.describeAge(nowMillis, last)}")
+        }
+
+        val todayCount = history.count { TimeNarrator.isSameDay(it.timestampMillis, nowMillis) }
+        if (todayCount > 0) {
+            appendLine("今天到目前为止有 $todayCount 条消息")
+        }
+
+        TimeNarrator.summarizeDay(timeline, nowMillis)
+            .takeIf { it.isNotBlank() }
+            ?.let { appendLine("今天发生的事：$it") }
+
+        appendLine()
     }
 
     /**
@@ -150,9 +218,16 @@ object PromptAssembler {
             .toList()
             .takeLast(RECENT_TURN_LIMIT)
             .forEach { message ->
+                // 每条消息前面带上它**发生的时间**。
+                //
+                // 这是时间感知里最关键的一步：没有时间戳，整段历史在模型眼里就是
+                // 「刚刚连续发生的」，于是它会把三天前的一句抱怨当成当下的情绪。
+                // 有了时间戳，它才知道「这句话是昨晚说的」「这条是三小时前发的」。
+                val stamped = "[${TimeNarrator.stamp(message.timestampMillis)}] ${message.text}"
+
                 turns += when (message.sender) {
-                    MessageSender.USER -> ChatTurn.user(message.text)
-                    MessageSender.AI -> ChatTurn.assistant(message.text)
+                    MessageSender.USER -> ChatTurn.user(stamped)
+                    MessageSender.AI -> ChatTurn.assistant(stamped)
                     MessageSender.SYSTEM -> return@forEach
                 }
             }
@@ -216,16 +291,31 @@ object PromptAssembler {
         }
     }
 
-    private fun formatNow(nowMillis: Long): String {
-        val zoned = Instant.ofEpochMilli(nowMillis).atZone(ZoneId.systemDefault())
-        val weekday = WEEKDAY_LABELS.getOrElse(zoned.dayOfWeek.value - 1) { "" }
-        return "${zoned.format(TIME_FORMATTER)} $weekday"
-    }
-
     private fun formatTime(millis: Long): String =
         Instant.ofEpochMilli(millis).atZone(ZoneId.systemDefault()).format(TIME_FORMATTER)
 
     private const val SEPARATOR = "────────────────"
+
+    /**
+     * 时间的使用方式。
+     *
+     * 「把时间放进上下文」只完成了一半 —— 模型看到「距上一次对话 6 小时」未必会
+     * 想到该追问，看到「02:30（深夜）」未必会想到该劝睡。所以除了给数据，还要给
+     * **判断规则**，而且要具体到可执行（「劝他睡」而不是「注意作息」）。
+     */
+    private val TIME_PROTOCOL = """
+        # 时间感
+
+        上面出现的每一个时间都是真实的系统时间，不是装饰。用它们来判断：
+
+        1. 「距上一次对话」隔了很久（几小时以上）而他没解释，可以直接问他这段时间去哪了。
+        2. 现在是深夜（23:00 之后或 5:00 之前）就劝他去睡，不要陪他继续做下去 ——
+           这是你作为监督者最该管住的时刻。
+        3. 待办的计划时间已经过去很久还没完成，要指出来，不要假装没看见。
+        4. 同一个应用反复被拦截，说明他在硬扛。先问清楚他到底要做什么，再决定放不放。
+        5. 对话历史里每条消息开头的 [MM-dd HH:mm] 是系统加的时间标记，**不是你说话的内容**，
+           你回复时不要写这种前缀。
+    """.trimIndent()
 
     /**
      * 给模型的指令协议说明。

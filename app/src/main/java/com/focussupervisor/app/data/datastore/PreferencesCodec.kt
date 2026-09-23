@@ -13,6 +13,8 @@ import com.focussupervisor.app.domain.model.MemorySource
 import com.focussupervisor.app.domain.model.MemoryTier
 import com.focussupervisor.app.domain.model.MessageSender
 import com.focussupervisor.app.domain.model.PersonaGender
+import com.focussupervisor.app.domain.model.TimelineEvent
+import com.focussupervisor.app.domain.model.TimelineKind
 import com.focussupervisor.app.domain.model.TodoItem
 import com.focussupervisor.app.domain.model.UserPersona
 import com.focussupervisor.app.domain.model.WhitelistApp
@@ -324,6 +326,48 @@ internal object PreferencesCodec {
     }
 
     // =======================================================================
+    // 时间线
+    // =======================================================================
+
+    fun encodeTimeline(events: List<TimelineEvent>): String {
+        val array = JSONArray()
+        events.forEach { event ->
+            array.put(
+                JSONObject().apply {
+                    put(FIELD_ID, event.id)
+                    put(FIELD_AT, event.atMillis)
+                    put(FIELD_KIND, event.kind.name)
+                    put(FIELD_TITLE, event.title)
+                    put(FIELD_DETAIL, event.detail)
+                },
+            )
+        }
+        return array.toString()
+    }
+
+    /**
+     * 解析时间线。
+     *
+     * 认不出的 [TimelineKind] 直接**丢弃这一条**，而不是回退成某个默认类型。
+     * 因为 kind 同时决定「界面上怎么显示」和「今天拦截了几次」这类统计 —— 猜错类型
+     * 会把一条无关事件算进拦截数里，那比少一条记录更糟。实践中只有「装过新版本又
+     * 退回旧版本」才会出现这种情况。
+     */
+    fun decodeTimeline(json: String?): List<TimelineEvent> = decodeList(json, "时间线") { obj ->
+        val id = obj.optString(FIELD_ID).takeIf { it.isNotBlank() } ?: return@decodeList null
+        val kind = runCatching { TimelineKind.valueOf(obj.optString(FIELD_KIND)) }.getOrNull()
+            ?: return@decodeList null
+
+        TimelineEvent(
+            id = id,
+            atMillis = obj.optLong(FIELD_AT),
+            kind = kind,
+            title = obj.optString(FIELD_TITLE),
+            detail = obj.optString(FIELD_DETAIL),
+        )
+    }
+
+    // =======================================================================
     // 向量
     // =======================================================================
 
@@ -452,4 +496,6 @@ internal object PreferencesCodec {
     private const val FIELD_MEMORY_ID = "memoryId"
     private const val FIELD_SENDER = "sender"
     private const val FIELD_TEXT = "text"
+    private const val FIELD_AT = "atMillis"
+    private const val FIELD_DETAIL = "detail"
 }

@@ -15,8 +15,10 @@ import com.focussupervisor.app.data.repository.DataStoreAppPolicyRepository
 import com.focussupervisor.app.data.repository.DataStoreConversationRepository
 import com.focussupervisor.app.data.repository.DataStoreMemoryRepository
 import com.focussupervisor.app.data.repository.DataStorePersonaRepository
+import com.focussupervisor.app.data.repository.DataStoreTimelineRepository
 import com.focussupervisor.app.data.repository.MemoryRepository
 import com.focussupervisor.app.data.repository.PersonaRepository
+import com.focussupervisor.app.data.repository.TimelineRepository
 import com.focussupervisor.app.data.repository.buildBuiltInWhitelist
 import com.focussupervisor.app.data.mock.MockChatData
 import com.focussupervisor.app.domain.model.AiPresetDefaults
@@ -67,11 +69,23 @@ class AppContainer(context: Context) {
     /** 持久化入口。策略仓库与配置仓库共用同一个 DataStore 文件。 */
     private val preferences = AppPreferencesDataSource(appContext)
 
+    /**
+     * 监督时间线：带时间的「发生过什么」。
+     *
+     * 必须**排在下面几个仓库前面**构造：策略、对话、记忆三个仓库都要往它里面记事件，
+     * 而它们的构造函数会持有这个引用。
+     */
+    val timeline: TimelineRepository = DataStoreTimelineRepository(
+        preferences = preferences,
+        scope = appScope,
+    )
+
     /** 监督策略仓库：白名单、待办、系统播报。 */
     val policy: AppPolicyRepository = DataStoreAppPolicyRepository(
         context = appContext,
         preferences = preferences,
         scope = appScope,
+        timeline = timeline,
     )
 
     /** AI 端点配置仓库：预设、选中项、当前生效配置。 */
@@ -91,12 +105,14 @@ class AppContainer(context: Context) {
     val conversation: ConversationRepository = DataStoreConversationRepository(
         preferences = preferences,
         scope = appScope,
+        timeline = timeline,
     )
 
     /** 记忆与向量索引。 */
     val memory: MemoryRepository = DataStoreMemoryRepository(
         preferences = preferences,
         scope = appScope,
+        timeline = timeline,
     )
 
     /** 权限状态检查与系统设置跳转。 */
@@ -130,6 +146,7 @@ class AppContainer(context: Context) {
         conversation = conversation,
         personas = personas,
         aiConfig = aiConfig,
+        timeline = timeline,
     )
 
     init {

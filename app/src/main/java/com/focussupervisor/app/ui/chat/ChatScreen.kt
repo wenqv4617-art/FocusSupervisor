@@ -68,6 +68,7 @@ import com.focussupervisor.app.ui.settings.AiConfigSheet
 import com.focussupervisor.app.ui.settings.EmbeddingSheet
 import com.focussupervisor.app.ui.settings.MemorySheet
 import com.focussupervisor.app.ui.settings.PersonaSheet
+import com.focussupervisor.app.ui.settings.TimelineSheet
 import com.focussupervisor.app.ui.theme.FocusSupervisorTheme
 import com.focussupervisor.app.ui.theme.FocusTheme
 
@@ -123,6 +124,8 @@ fun ChatRoute(
         onPersonaDismiss = viewModel::onPersonaSheetDismiss,
         onMemoryDismiss = viewModel::onMemorySheetDismiss,
         onEmbeddingDismiss = viewModel::onEmbeddingSheetDismiss,
+        onTimelineDismiss = viewModel::onTimelineSheetDismiss,
+        onClearTimeline = viewModel::onClearTimeline,
         onMessageLongPress = viewModel::onMessageLongPress,
         onMessageActionDismiss = viewModel::onMessageActionDismiss,
         onMessageEditRequested = viewModel::onMessageEditRequested,
@@ -149,6 +152,8 @@ fun ChatRoute(
  * @param onPersonaDismiss 关闭「人设管理」。
  * @param onMemoryDismiss 关闭「记忆管理」。
  * @param onEmbeddingDismiss 关闭「向量模型」。
+ * @param onTimelineDismiss 关闭「时间线」。
+ * @param onClearTimeline 清空时间线。
  * @param onMessageLongPress 长按某条消息。
  * @param onMessageActionDismiss 关闭长按操作面板。
  * @param onMessageEditRequested 从操作面板进入编辑。
@@ -171,6 +176,8 @@ fun ChatScreen(
     onPersonaDismiss: () -> Unit,
     onMemoryDismiss: () -> Unit,
     onEmbeddingDismiss: () -> Unit,
+    onTimelineDismiss: () -> Unit,
+    onClearTimeline: () -> Unit,
     onMessageLongPress: (ChatMessage) -> Unit,
     onMessageActionDismiss: () -> Unit,
     onMessageEditRequested: () -> Unit,
@@ -248,6 +255,17 @@ fun ChatScreen(
 
     if (uiState.isEmbeddingSheetVisible) {
         EmbeddingSheet(onDismiss = onEmbeddingDismiss)
+    }
+
+    if (uiState.isTimelineSheetVisible) {
+        TimelineSheet(
+            events = uiState.timelineEvents,
+            // 相对时间用状态里那个基准，不要在这里现取 System.currentTimeMillis()：
+            // 现取会让每次重组都算出略有差异的结果，一屏之内的相对时间互相矛盾。
+            nowMillis = uiState.nowMillis,
+            onClear = onClearTimeline,
+            onDismiss = onTimelineDismiss,
+        )
     }
 
     // 长按消息的三步：操作面板 → 编辑 / 删除确认。
@@ -564,6 +582,8 @@ private fun ChatScreenPreview() {
             onPersonaDismiss = {},
             onMemoryDismiss = {},
             onEmbeddingDismiss = {},
+            onTimelineDismiss = {},
+            onClearTimeline = {},
             onMessageLongPress = {},
             onMessageActionDismiss = {},
             onMessageEditRequested = {},
@@ -597,6 +617,8 @@ private fun ChatScreenPanelExpandedPreview() {
             onPersonaDismiss = {},
             onMemoryDismiss = {},
             onEmbeddingDismiss = {},
+            onTimelineDismiss = {},
+            onClearTimeline = {},
             onMessageLongPress = {},
             onMessageActionDismiss = {},
             onMessageEditRequested = {},

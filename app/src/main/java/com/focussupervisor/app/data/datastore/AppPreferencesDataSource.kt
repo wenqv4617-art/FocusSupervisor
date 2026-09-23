@@ -17,6 +17,8 @@ import com.focussupervisor.app.domain.model.EmbeddingConfig
 import com.focussupervisor.app.domain.model.IndexedDocument
 import com.focussupervisor.app.domain.model.MemoryDefaults
 import com.focussupervisor.app.domain.model.MemoryEntry
+import com.focussupervisor.app.domain.model.TimelineDefaults
+import com.focussupervisor.app.domain.model.TimelineEvent
 import com.focussupervisor.app.domain.model.TodoItem
 import com.focussupervisor.app.domain.model.UserPersona
 import com.focussupervisor.app.domain.model.WhitelistApp
@@ -276,6 +278,38 @@ class AppPreferencesDataSource(context: Context) {
     }
 
     // -----------------------------------------------------------------------
+    // 时间线
+    // -----------------------------------------------------------------------
+
+    /**
+     * 追加一条时间线事件。
+     *
+     * 存储顺序是**由新到旧**（新事件放最前），读取时再按 `atMillis` 排序 ——
+     * 这样 `take(n)` 天然就是「保留最近的 n 条」，不需要每次写入先排序。
+     *
+     * 上限用 [TimelineDefaults.MAX_EVENTS]：时间线是高频写入的（每次拦截、每次放行
+     * 都写一条），无上限会让每次写盘的成本随时间线性增长，而 DataStore 每次写入
+     * 都要重写整份 JSON。
+     */
+    suspend fun appendTimelineEvent(event: TimelineEvent) {
+        dataStore.edit { prefs ->
+            val current = PreferencesCodec.decodeTimeline(prefs[KEY_TIMELINE])
+            prefs[KEY_TIMELINE] = PreferencesCodec.encodeTimeline(
+                (listOf(event) + current).take(TimelineDefaults.MAX_EVENTS),
+            )
+        }
+    }
+
+    /** 整体覆盖时间线。用户主动清空时用。 */
+    suspend fun replaceTimelineEvents(events: List<TimelineEvent>) {
+        dataStore.edit { prefs ->
+            prefs[KEY_TIMELINE] = PreferencesCodec.encodeTimeline(
+                events.takeLast(TimelineDefaults.MAX_EVENTS),
+            )
+        }
+    }
+
+    // -----------------------------------------------------------------------
     // 对话
     // -----------------------------------------------------------------------
 
@@ -331,6 +365,7 @@ class AppPreferencesDataSource(context: Context) {
         memories = PreferencesCodec.decodeMemories(this[KEY_MEMORIES]),
         memoryIndex = PreferencesCodec.decodeIndex(this[KEY_MEMORY_INDEX]),
         messages = PreferencesCodec.decodeMessages(this[KEY_MESSAGES]),
+        timeline = PreferencesCodec.decodeTimeline(this[KEY_TIMELINE]),
         isSeeded = this[KEY_SEEDED] ?: false,
         schemaVersion = this[KEY_SCHEMA_VERSION] ?: 0,
     )
@@ -373,6 +408,7 @@ class AppPreferencesDataSource(context: Context) {
         private val KEY_MEMORIES = stringPreferencesKey("memories_json")
         private val KEY_MEMORY_INDEX = stringPreferencesKey("memory_index_json")
         private val KEY_MESSAGES = stringPreferencesKey("messages_json")
+        private val KEY_TIMELINE = stringPreferencesKey("timeline_json")
         private val KEY_SEEDED = booleanPreferencesKey("seeded")
         private val KEY_SCHEMA_VERSION = intPreferencesKey("schema_version")
     }
@@ -398,6 +434,7 @@ data class AppPreferences(
     val memories: List<MemoryEntry> = emptyList(),
     val memoryIndex: List<IndexedDocument> = emptyList(),
     val messages: List<ChatMessage> = emptyList(),
+    val timeline: List<TimelineEvent> = emptyList(),
     val isSeeded: Boolean = false,
     val schemaVersion: Int = 0,
 )

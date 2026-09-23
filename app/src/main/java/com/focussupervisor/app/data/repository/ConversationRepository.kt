@@ -3,6 +3,8 @@ package com.focussupervisor.app.data.repository
 import android.util.Log
 import com.focussupervisor.app.data.datastore.AppPreferencesDataSource
 import com.focussupervisor.app.domain.model.ChatMessage
+import com.focussupervisor.app.domain.model.MessageSender
+import com.focussupervisor.app.domain.model.TimelineKind
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -46,6 +48,7 @@ interface ConversationRepository {
 class DataStoreConversationRepository(
     private val preferences: AppPreferencesDataSource,
     scope: CoroutineScope,
+    private val timeline: TimelineRepository,
 ) : ConversationRepository {
 
     private val _messages = MutableStateFlow<List<ChatMessage>>(emptyList())
@@ -71,6 +74,14 @@ class DataStoreConversationRepository(
 
     override suspend fun updateText(id: String, text: String): Boolean = try {
         preferences.updateMessageText(id, text)
+        // 记时间线：事后修改自己说过的话，是监督里值得留痕的一件事。
+        // 只记「改成了什么」，不记「原来是什么」—— 原文已经不存在了（被覆盖），
+        // 记一个半真半假的旧版本反而会误导。
+        timeline.record(
+            kind = TimelineKind.MESSAGE_EDITED,
+            title = text.take(EVENT_PREVIEW_LENGTH),
+            detail = "一条已发出的消息被改写",
+        )
         true
     } catch (e: CancellationException) {
         throw e
@@ -80,7 +91,21 @@ class DataStoreConversationRepository(
     }
 
     override suspend fun delete(id: String): Boolean = try {
+        // 先捞出来：删掉之后就没有正文可供记录了。
+        val removed = _messages.value.firstOrNull { it.id == id }
+
         preferences.removeMessage(id)
+
+        timeline.record(
+            kind = TimelineKind.MESSAGE_DELETED,
+            title = removed?.text?.take(EVENT_PREVIEW_LENGTH).orEmpty(),
+            detail = when (removed?.sender) {
+                MessageSender.USER -> "他删掉了自己发的一条消息"
+                MessageSender.AI -> "他删掉了 AI 的一条回复"
+                MessageSender.SYSTEM -> "他删掉了一条系统播报"
+                null -> "删除了一条消息"
+            },
+        )
         true
     } catch (e: CancellationException) {
         throw e
@@ -101,5 +126,8 @@ class DataStoreConversationRepository(
 
     private companion object {
         const val TAG = "ConversationRepository"
+
+        /** 时间线里留的消息摘要长度。太长的正文会把整条提示词挤掉。 */
+        const val EVENT_PREVIEW_LENGTH = 40
     }
 }

@@ -2,9 +2,11 @@ package com.focussupervisor.app.data.repository
 
 import android.content.Context
 import android.util.Log
+import com.focussupervisor.app.core.time.TimeNarrator
 import com.focussupervisor.app.data.datastore.AppPreferencesDataSource
 import com.focussupervisor.app.domain.model.SystemNotice
 import com.focussupervisor.app.domain.model.SystemWhitelist
+import com.focussupervisor.app.domain.model.TimelineKind
 import com.focussupervisor.app.domain.model.TodoItem
 import com.focussupervisor.app.domain.model.WhitelistApp
 import kotlinx.coroutines.CancellationException
@@ -60,6 +62,7 @@ class DataStoreAppPolicyRepository(
     context: Context,
     private val preferences: AppPreferencesDataSource,
     private val scope: CoroutineScope,
+    private val timeline: TimelineRepository,
     private val clock: () -> Long = System::currentTimeMillis,
 ) : AppPolicyRepository {
 
@@ -163,14 +166,40 @@ class DataStoreAppPolicyRepository(
             reason = reason,
         )
 
-        writeOrReport("保存临时豁免") {
+        val saved = writeOrReport("保存临时豁免") {
             preferences.upsertTemporaryWhitelist(entry)
+        }
+
+        // 只有真的写进去了才记时间线 —— 记一条「已放行」而实际没生效，
+        // 会让 AI 以为豁免存在，比不记更糟。
+        if (saved) {
+            timeline.record(
+                kind = TimelineKind.WHITELIST_GRANTED,
+                title = entry.appName,
+                detail = "$durationMinutes 分钟 · 理由：${entry.reason}",
+                atMillis = clock(),
+            )
         }
     }
 
     override suspend fun revokeTemporaryWhitelist(packageName: String) {
-        writeOrReport("撤销临时豁免") {
+        // 先取一次名字：撤销之后白名单里就没这条了，标签只能从包名解析。
+        val existing = _whitelist.value.firstOrNull {
+            it.packageName == packageName && !it.isPermanent
+        }
+
+        val saved = writeOrReport("撤销临时豁免") {
             preferences.removeTemporaryWhitelist(packageName)
+        }
+
+        // 本来就没什么可撤的，就不要在时间线上留一条「收回了没有的东西」。
+        if (saved && existing != null) {
+            timeline.record(
+                kind = TimelineKind.WHITELIST_REVOKED,
+                title = existing.appName,
+                detail = packageName,
+                atMillis = clock(),
+            )
         }
     }
 
@@ -184,15 +213,34 @@ class DataStoreAppPolicyRepository(
             title = title,
             plannedAtMillis = plannedAtMillis,
         )
-        writeOrReport("保存待办") {
+        val saved = writeOrReport("保存待办") {
             preferences.upsertTodo(item)
+        }
+        if (saved) {
+            timeline.record(
+                kind = TimelineKind.TODO_ADDED,
+                title = item.title,
+                detail = "计划 ${TimeNarrator.stamp(plannedAtMillis)}",
+                atMillis = clock(),
+            )
         }
         return item
     }
 
     override suspend fun setTodoDone(id: String, isDone: Boolean) {
-        writeOrReport("更新待办") {
+        val target = _todos.value.firstOrNull { it.id == id }
+
+        val saved = writeOrReport("更新待办") {
             preferences.setTodoDone(id, isDone)
+        }
+
+        // 只记「完成」。取消完成不记：那不是一件发生过的事，而是撤销。
+        if (saved && isDone && target != null) {
+            timeline.record(
+                kind = TimelineKind.TODO_COMPLETED,
+                title = target.title,
+                atMillis = clock(),
+            )
         }
     }
 
@@ -227,14 +275,16 @@ class DataStoreAppPolicyRepository(
      * 合适的兜底位置 —— 抛出去只会变成一个崩溃对话框。而「写失败了」这件事用户
      * 有权知道：以为已经开了 10 分钟豁免、结果重启就没了，比当场看到一条错误更难接受。
      */
-    private suspend fun writeOrReport(action: String, block: suspend () -> Unit) {
-        try {
+    private suspend fun writeOrReport(action: String, block: suspend () -> Unit): Boolean {
+        return try {
             block()
+            true
         } catch (e: CancellationException) {
             throw e
         } catch (t: Throwable) {
             Log.e(TAG, "$action 失败", t)
             publishNotice("本地保存失败：$action")
+            false
         }
     }
 

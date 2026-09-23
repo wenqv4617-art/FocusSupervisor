@@ -123,6 +123,12 @@ enum class ChatDialog {
  * @param messageActionTarget 长按选中的消息，非空时弹出操作面板。
  * @param messageEditTarget 正在编辑的消息，非空时弹出编辑框。
  * @param messageDeleteTarget 待确认删除的消息，非空时弹出确认框。
+ * @param isTimelineSheetVisible 「时间线」是否展开。
+ * @param timelineEvents 监督时间线快照，按时间正序。它是 AI 上下文里「最近发生了什么」
+ *        那一段的来源 —— 界面展示它，是为了让用户能验证「AI 到底知道些什么」。
+ * @param nowMillis 界面刷新时的当前时间。放进状态而不是各处现取：时间线上
+ *        「3 分钟前」这类相对说法必须在同一帧里用同一个基准，否则同一屏会出现
+ *        两条互相矛盾的相对时间。
  */
 data class ChatUiState(
     val agentName: String = "FocusSupervisor",
@@ -145,6 +151,9 @@ data class ChatUiState(
     val messageActionTarget: ChatMessage? = null,
     val messageEditTarget: ChatMessage? = null,
     val messageDeleteTarget: ChatMessage? = null,
+    val isTimelineSheetVisible: Boolean = false,
+    val timelineEvents: List<TimelineEvent> = emptyList(),
+    val nowMillis: Long = System.currentTimeMillis(),
 ) {
     /** 有非空白草稿时才允许发送，避免发出一条空消息。 */
     val canSend: Boolean get() = inputText.isNotBlank()

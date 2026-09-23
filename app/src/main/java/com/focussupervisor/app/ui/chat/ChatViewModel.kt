@@ -13,6 +13,7 @@ import com.focussupervisor.app.domain.model.MessageSender
 import com.focussupervisor.app.domain.model.PermissionStatus
 import com.focussupervisor.app.domain.model.PermissionTarget
 import com.focussupervisor.app.domain.model.SystemNotice
+import com.focussupervisor.app.domain.model.TimelineKind
 import com.focussupervisor.app.ui.components.ActionIds
 import com.focussupervisor.app.ui.components.defaultActionItems
 import kotlinx.coroutines.Job
@@ -61,6 +62,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val lockOverlay = container.lockOverlay
     private val conversation = container.conversation
     private val personaRepository = container.personas
+    private val timeline = container.timeline
     private val engine = container.conversationEngine
 
     private val _uiState = MutableStateFlow(
@@ -89,6 +91,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         observeTodos()
         observeNotices()
         observeOverlay()
+        observeTimeline()
         refreshPermissions()
     }
 
@@ -158,6 +161,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
             ActionIds.EMBEDDING_CONFIG -> openSheet(SheetTarget.EMBEDDING_CONFIG)
 
+            ActionIds.TIMELINE -> openSheet(SheetTarget.TIMELINE)
+
             ActionIds.AI_CONFIG -> openSheet(SheetTarget.AI_CONFIG)
 
             else -> {
@@ -178,6 +183,21 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     fun onMemorySheetDismiss() = closeSheet(SheetTarget.MEMORY)
 
     fun onEmbeddingSheetDismiss() = closeSheet(SheetTarget.EMBEDDING_CONFIG)
+
+    fun onTimelineSheetDismiss() = closeSheet(SheetTarget.TIMELINE)
+
+    /**
+     * 清空时间线。
+     *
+     * 只清事件记录，**不动对话与记忆** —— 用户想删的是「这段时间的监督流水」，
+     * 不是他和 AI 说过的话。两者混在一起清，会造成一次不可逆的误删。
+     */
+    fun onClearTimeline() {
+        viewModelScope.launch {
+            timeline.clear()
+            policy.publishNotice("时间线已清空")
+        }
+    }
 
     // -----------------------------------------------------------------------
     // 消息长按操作
@@ -294,6 +314,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         val selfPackage = getApplication<Application>().packageName
         lockOverlay.show(packageName = selfPackage, headline = LOCK_TEST_HEADLINE)
 
+        // 手动测试也是一次「用户操作」，同样要留痕：它至少说明这个人在主动检查
+        // 监督还在不在。这条记录之后会随上下文一起进提示词。
+        timeline.record(
+            kind = TimelineKind.LOCK_TEST,
+            title = LOCK_TEST_HEADLINE,
+        )
+
         lockTestJob?.cancel()
         lockTestJob = viewModelScope.launch {
             var finished = false
@@ -379,6 +406,23 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * 观测时间线，并把「当前时刻」一起放进状态。
+     *
+     * `nowMillis` 必须跟着事件更新，不能只在初始化时取一次：时间线上的相对时间
+     * （「3 分钟前」）是相对**现在**算的，如果这个基准停在应用启动那一刻，
+     * 界面开着放一小时，所有记录都会显示成「刚刚」。
+     */
+    private fun observeTimeline() {
+        viewModelScope.launch {
+            timeline.events.collect { events ->
+                _uiState.update {
+                    it.copy(timelineEvents = events, nowMillis = System.currentTimeMillis())
+                }
+            }
+        }
+    }
+
     private fun observeOverlay() {
         viewModelScope.launch {
             lockOverlay.isShowing.collect { showing ->
@@ -416,7 +460,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     // -----------------------------------------------------------------------
 
     /** 三个 BottomSheet 的标识。 */
-    private enum class SheetTarget { AI_CONFIG, PERSONA, MEMORY, EMBEDDING_CONFIG }
+    private enum class SheetTarget { AI_CONFIG, PERSONA, MEMORY, EMBEDDING_CONFIG, TIMELINE }
 
     private fun openDialog(dialog: ChatDialog) {
         _uiState.update {
@@ -438,6 +482,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 isPersonaSheetVisible = target == SheetTarget.PERSONA,
                 isMemorySheetVisible = target == SheetTarget.MEMORY,
                 isEmbeddingSheetVisible = target == SheetTarget.EMBEDDING_CONFIG,
+                isTimelineSheetVisible = target == SheetTarget.TIMELINE,
             )
         }
     }
@@ -449,6 +494,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 SheetTarget.PERSONA -> it.copy(isPersonaSheetVisible = false)
                 SheetTarget.MEMORY -> it.copy(isMemorySheetVisible = false)
                 SheetTarget.EMBEDDING_CONFIG -> it.copy(isEmbeddingSheetVisible = false)
+                SheetTarget.TIMELINE -> it.copy(isTimelineSheetVisible = false)
             }
         }
     }

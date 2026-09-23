@@ -13,6 +13,7 @@ import com.focussupervisor.app.domain.model.MemorySource
 import com.focussupervisor.app.domain.model.MemoryTier
 import com.focussupervisor.app.domain.model.MessageSender
 import com.focussupervisor.app.domain.model.RecallResult
+import com.focussupervisor.app.domain.model.TimelineKind
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -140,6 +141,7 @@ interface MemoryRepository {
 class DataStoreMemoryRepository(
     private val preferences: AppPreferencesDataSource,
     scope: CoroutineScope,
+    private val timeline: TimelineRepository,
     private val clock: () -> Long = System::currentTimeMillis,
 ) : MemoryRepository {
 
@@ -195,7 +197,16 @@ class DataStoreMemoryRepository(
             pinned = pinned,
         )
 
-        return if (write("保存记忆") { preferences.upsertMemory(entry) }) entry else null
+        val saved = write("保存记忆") { preferences.upsertMemory(entry) }
+        if (saved) {
+            timeline.record(
+                kind = TimelineKind.MEMORY_WRITTEN,
+                title = entry.content,
+                detail = "${tier.label} · ${source.label}写入",
+                atMillis = entry.createdAtMillis,
+            )
+        }
+        return if (saved) entry else null
     }
 
     override suspend fun forget(id: String): Boolean =
@@ -409,6 +420,8 @@ class DataStoreMemoryRepository(
         val current = latest.memories
 
         var promoted = 0
+        val promotedEntries = mutableListOf<MemoryEntry>()
+
         val next = current.map { entry ->
             if (entry.id !in idSet) return@map entry
 
@@ -418,7 +431,9 @@ class DataStoreMemoryRepository(
             )
             if (bumped.isEligibleForPromotion) {
                 promoted++
-                bumped.copy(tier = MemoryTier.LONG_TERM)
+                val longTerm = bumped.copy(tier = MemoryTier.LONG_TERM)
+                promotedEntries += longTerm
+                longTerm
             } else {
                 bumped
             }
@@ -429,6 +444,17 @@ class DataStoreMemoryRepository(
         write("更新召回计数") { preferences.replaceMemories(next) }
         if (promoted > 0) {
             Log.i(TAG, "$promoted 条短期记忆因反复被召回，已沉入长久记忆")
+            // 记忆升级是「他自己都反复提起的事」，属于监督里很有分量的一条证据，
+            // 所以进时间线。时间戳沿用本轮召回时间 now，而不是各条的 createdAtMillis ——
+            // 升级这件事发生在**现在**。
+            promotedEntries.forEach { entry ->
+                timeline.record(
+                    kind = TimelineKind.MEMORY_PROMOTED,
+                    title = entry.content,
+                    detail = "累计被回想 ${entry.recallCount} 次",
+                    atMillis = now,
+                )
+            }
         }
     }
 

@@ -11,7 +11,9 @@ import android.view.accessibility.AccessibilityManager
 import com.focussupervisor.app.MainActivity
 import com.focussupervisor.app.appContainer
 import com.focussupervisor.app.data.repository.AppPolicyRepository
+import com.focussupervisor.app.data.repository.TimelineRepository
 import com.focussupervisor.app.domain.model.SystemWhitelist
+import com.focussupervisor.app.domain.model.TimelineKind
 import com.focussupervisor.app.ui.overlay.LockOverlayController
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -73,6 +75,7 @@ class FocusAccessibilityService : AccessibilityService() {
 
     private lateinit var policy: AppPolicyRepository
     private lateinit var lockOverlay: LockOverlayController
+    private lateinit var timeline: TimelineRepository
 
     /**
      * 上一次判定过的前台包名。
@@ -106,6 +109,7 @@ class FocusAccessibilityService : AccessibilityService() {
         val container = application.appContainer
         policy = container.policy
         lockOverlay = container.lockOverlay
+        timeline = container.timeline
     }
 
     /**
@@ -351,6 +355,17 @@ class FocusAccessibilityService : AccessibilityService() {
         if (publishBlockNotice && packageName != lastBlockNotifiedPackage) {
             lastBlockNotifiedPackage = packageName
             policy.publishNotice("启动未受豁免应用 [$packageName]，已执行压制")
+
+            // 拦截是监督里最重要的证据，必须进时间线（带时间），AI 才可能在对话里
+            // 说出「你今天已经被拦了七次」这种话。
+            //
+            // 这条分支每个应用每次连续锁定只走一次（上面的去重），而且走到这里时遮罩
+            // 已经盖上了，所以顺手解析一次应用名（内部有缓存）不会让用户看到目标应用。
+            timeline.record(
+                kind = TimelineKind.APP_BLOCKED,
+                title = policy.resolveAppLabel(packageName),
+                detail = packageName,
+            )
         }
     }
 

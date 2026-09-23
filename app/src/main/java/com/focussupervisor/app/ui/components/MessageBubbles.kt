@@ -117,6 +117,7 @@ fun MessageBubble(
 
         MessageSender.SYSTEM -> SystemMessagePill(
             text = message.text,
+            timestampMillis = message.timestampMillis,
             onLongPress = { onLongPress(message) },
             modifier = modifier,
         )
@@ -225,20 +226,25 @@ private fun ChatBubble(
  * - 居中，不参与左右对话的视线流动，天然被读成「旁白」；
  * - 中性灰底 + 中灰字，对比度刻意低于正文，做到存在但不抢戏；
  * - 全圆角（50% → 胶囊形），与方中带圆的对话气泡形成形状语言的区分；
- * - 无头像、无姓名、无时间戳 —— 它不代表任何人说话。
+ * - 无头像、无姓名 —— 它不代表任何人说话。
+ *
+ * 时间戳是**有**的，和气泡一样贴在下方。系统播报全部是「什么时候发生了什么」，
+ * 去掉时间就等于把最关键的那半句信息丢了；监督场景里「这是十分钟前拦的，
+ * 还是昨天拦的」决定了用户接下来该做什么。
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun SystemMessagePill(
     text: String,
+    timestampMillis: Long,
     onLongPress: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
-    Box(
+    Column(
         modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp),
-        contentAlignment = Alignment.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Surface(
             color = FocusTheme.colors.systemPill,
@@ -261,6 +267,13 @@ fun SystemMessagePill(
                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
             )
         }
+
+        Text(
+            text = formatMessageTime(timestampMillis),
+            style = MaterialTheme.typography.bodySmall,
+            color = FocusTheme.colors.textSecondary,
+            modifier = Modifier.padding(top = 3.dp),
+        )
     }
 }
 
@@ -283,7 +296,7 @@ private fun MessageBubblesPreview() {
                 .padding(vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            SystemMessagePill(text = "[系统] 已开启屏幕视线感知")
+            SystemMessagePill(text = "[系统] 已开启屏幕视线感知", timestampMillis = 1_756_000_000_000L)
             MessageBubble(
                 message = ChatMessage(
                     id = "a",
