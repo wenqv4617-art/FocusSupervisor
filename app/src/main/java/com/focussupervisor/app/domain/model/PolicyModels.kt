@@ -163,6 +163,41 @@ object SystemWhitelist {
     )
 
     /**
+     * 「过客型」系统包。
+     *
+     * 这些包会**非常频繁**地弹出窗口并触发 `TYPE_WINDOW_STATE_CHANGED`：状态栏、
+     * 通知栏、音量面板、导航栏、权限弹窗、以及各厂商安全中心的「检测到悬浮窗遮挡」
+     * 提示。这些窗口都盖在用户正在使用的应用**之上**，但它们**绝不代表用户切换了
+     * 前台应用**。
+     *
+     * 为什么单列一份：拦截逻辑如果对这些包的事件照常判定，结论会是「前台变成了一个
+     * 白名单应用（systemui 当然在白名单里）→ 放行」，于是遮罩会在没有任何用户操作的
+     * 情况下自己掉下来，等那个系统弹窗消失、被拦应用重新发一次窗口事件，遮罩又盖上。
+     * 表现出来就是「锁一下、自己掉了、过一会又锁上」。
+     *
+     * 所以：**这些包的事件完全不允许改变锁定状态**，既不解锁也不上锁。
+     */
+    val TRANSIENT_WINDOW_PACKAGES: Set<String> = setOf(
+        // 状态栏 / 通知栏 / 音量面板 / 导航栏
+        "com.android.systemui",
+        // AOSP 与 Google 的权限、安装确认弹窗
+        "com.android.permissioncontroller",
+        "com.google.android.permissioncontroller",
+        // 系统 framework 自身的弹窗（ANR、崩溃、关机确认等）
+        "android",
+        // 厂商安全中心 / 权限管理器的「遮挡检测」提示
+        "com.miui.securitycenter",
+        "com.lbe.security.miui",
+        "com.huawei.systemmanager",
+        "com.coloros.safecenter",
+        "com.oppo.safe",
+        "com.vivo.permissionmanager",
+        "com.bbk.iqoo.settings",
+        "com.samsung.android.lool",
+        "com.sec.android.app.servicemodeapp",
+    )
+
+    /**
      * 本应用自身的所有可能包名。
      *
      * debug 构建如果加了 applicationIdSuffix，包名会和 release 不一样；判定时用

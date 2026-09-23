@@ -11,6 +11,7 @@ import android.view.accessibility.AccessibilityManager
 import com.focussupervisor.app.MainActivity
 import com.focussupervisor.app.appContainer
 import com.focussupervisor.app.data.repository.AppPolicyRepository
+import com.focussupervisor.app.domain.model.SystemWhitelist
 import com.focussupervisor.app.ui.overlay.LockOverlayController
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -90,6 +91,15 @@ class FocusAccessibilityService : AccessibilityService() {
      */
     private var hasWarnedMissingOverlayPermission = false
 
+    /**
+     * 上一次已经播报过「已压制」的包名。
+     *
+     * 和 [lastEvaluatedPackage] 分开：那个负责挡住重复判定，这个只负责挡住重复播报。
+     * 两者混用会让「遮罩被误撤后重新盖上」这种情况播报两遍 —— 用户会看到聊天流里
+     * 凭空多出一条一模一样的拦截记录。
+     */
+    private var lastBlockNotifiedPackage: String? = null
+
     override fun onCreate() {
         super.onCreate()
         // 容器由 Application.onCreate 建好，此时一定已就绪。
@@ -108,6 +118,7 @@ class FocusAccessibilityService : AccessibilityService() {
         super.onServiceConnected()
 
         lastEvaluatedPackage = null
+        lastBlockNotifiedPackage = null
         hasWarnedMissingOverlayPermission = false
 
         Log.i(TAG, "无障碍服务已连接")
@@ -167,6 +178,18 @@ class FocusAccessibilityService : AccessibilityService() {
             return
         }
 
+        // -------------------------------------------------------------------
+        // 过客型系统窗口：不允许改变锁定状态
+        // -------------------------------------------------------------------
+        // 状态栏、通知栏、音量面板、权限弹窗、厂商安全中心的「遮挡检测」提示……
+        // 这些包都在白名单里，但它们弹出时用户其实**还待在被拦的应用里**。
+        // 如果照常判定，结论会是「前台变成了白名单应用 → 放行」，遮罩自己掉下来；
+        // 等弹窗消失、被拦应用重新发一次窗口事件，遮罩又盖上 —— 用户看到的就是
+        // 「锁一下、自己掉了、过一会又锁上」。
+        //
+        // 所以这类事件在这里就掐掉，既不解锁也不上锁。
+        if (packageName in SystemWhitelist.TRANSIENT_WINDOW_PACKAGES) return
+
         evaluate(packageName, publishBlockNotice = true)
     }
 
@@ -215,6 +238,7 @@ class FocusAccessibilityService : AccessibilityService() {
     override fun onUnbind(intent: Intent?): Boolean {
         lockOverlay.dismiss()
         lastEvaluatedPackage = null
+        lastBlockNotifiedPackage = null
         Log.i(TAG, "无障碍服务已解绑")
         return super.onUnbind(intent)
     }
@@ -229,6 +253,7 @@ class FocusAccessibilityService : AccessibilityService() {
     override fun onDestroy() {
         lockOverlay.dismiss()
         lastEvaluatedPackage = null
+        lastBlockNotifiedPackage = null
         serviceScope.cancel()
         Log.i(TAG, "无障碍服务已销毁")
         super.onDestroy()
@@ -267,12 +292,36 @@ class FocusAccessibilityService : AccessibilityService() {
         val whitelisted = policy.isAppWhitelisted(packageName)
 
         if (whitelisted) {
-            // 放行。注意这里必须处理「上一个应用留下的遮罩」：用户按返回键回桌面时，
-            // 遮罩是靠这次判定撤掉的。
+            // -----------------------------------------------------------------
+            // 关键：撤遮罩之前，先确认「用户真的已经不在被拦的应用里了」
+            // -----------------------------------------------------------------
+            // 分两种情况，不能混为一谈：
+            //
+            //   A. 事件里的包名**就是**被遮罩盖住的那个应用
+            //      → 它刚刚变成白名单（AI 批准了豁免），用户还停在这个应用里，
+            //        此时**必须**立刻解锁。这一条不能拦。
+            //
+            //   B. 事件里的包名是**另一个**白名单应用
+            //      → 可能只是状态栏、键盘、某个厂商弹窗冒了一下（它们的包名也都在
+            //        白名单里）。这时要再问系统一次：当前**输入焦点所在**的窗口是谁。
+            //        我们的遮罩带 FLAG_NOT_FOCUSABLE 不抢焦点，所以只要焦点还在被拦
+            //        应用上，就说明用户其实没走，那条事件是噪音，不许撤遮罩。
+            //
+            // 少了 B 这道闸，遮罩会在没有任何用户操作的情况下自己掉下来，等系统
+            // 弹窗消失、被拦应用重新发一次窗口事件，遮罩又盖上 —— 表现出来就是
+            // 「锁一下、自己掉了、过一会又锁上」。
+            val lockedPackage = lockOverlay.lockedPackage.value
+            val noiseFromOtherPackage = lockOverlay.isShowing.value &&
+                packageName != lockedPackage &&
+                stillFocusedOnLockedApp()
+
+            if (noiseFromOtherPackage) return
+
             if (lockOverlay.isShowing.value) {
                 lockOverlay.dismiss()
             }
             lastEvaluatedPackage = packageName
+            lastBlockNotifiedPackage = null
             return
         }
 
@@ -294,8 +343,36 @@ class FocusAccessibilityService : AccessibilityService() {
             return
         }
 
-        if (publishBlockNotice) {
+        if (publishBlockNotice && packageName != lastBlockNotifiedPackage) {
+            lastBlockNotifiedPackage = packageName
             policy.publishNotice("启动未受豁免应用 [$packageName]，已执行压制")
+        }
+    }
+
+    /**
+     * 当前输入焦点是否仍然停在「被遮罩盖住的那个应用」上。
+     *
+     * 这是判断「用户到底走没走」的第二道闸。返回 true 表示**不该撤遮罩**。
+     *
+     * `rootInActiveWindow` 的取值时机不完全可控，因此三条分支全部朝「保守」的方向写：
+     *  - 查不到活动窗口  → true（宁可多锁一会儿，也不要闪一下）；
+     *  - 还是被拦的那个应用 → true（用户没走，刚才那条事件是噪音）；
+     *  - 活动窗口是「我们自己、但不是监督界面」→ true（那是我们自己的遮罩窗口）；
+     *  - 其余 → false（用户确实切走了，放行）。
+     *
+     * 这个判断的代价是一次进程内的窗口查询，不涉及跨进程遍历节点，可以承受。
+     */
+    private fun stillFocusedOnLockedApp(): Boolean {
+        val lockedPackage = lockOverlay.lockedPackage.value ?: return false
+        val root = rootInActiveWindow ?: return true
+        val activePackage = root.packageName?.toString().orEmpty()
+
+        return when {
+            activePackage.isEmpty() -> true
+            activePackage == lockedPackage -> true
+            activePackage == this.packageName &&
+                root.className?.toString() != SELF_ACTIVITY_CLASS -> true
+            else -> false
         }
     }
 
