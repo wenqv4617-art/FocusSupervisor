@@ -1,7 +1,7 @@
 # FocusSupervisor
 
-AI 监督自律 App。当前处于**阶段二**：应用监控、全屏遮罩、白名单判定已经跑通闭环，
-AI 侧的「白名单审批」与「TodoList 盘问」还只有数据地基。
+AI 监督自律 App。当前处于**阶段三**：本地持久化、OpenAI 兼容通信层与 AI 配置中心
+已经就位；真正调用模型的「白名单审批」与「TodoList 盘问」还差最后一层业务编排。
 
 ---
 
@@ -10,8 +10,9 @@ AI 侧的「白名单审批」与「TodoList 盘问」还只有数据地基。
 | 阶段 | 内容 | 状态 |
 | --- | --- | --- |
 | 一 | 工程骨架、仿微信界面、CI 打包 | 已完成 |
-| 二 | 权限引导、动态白名单、全屏遮罩、TodoList 数据地基 | 当前 |
-| 三 | TodoList 盘问、AI 白名单审批 | 未开始 |
+| 二 | 权限引导、动态白名单、全屏遮罩、TodoList 数据地基 | 已完成 |
+| 三 | DataStore 持久化、OpenAI 兼容通信层、AI 配置中心 | 当前 |
+| 四 | TodoList 盘问、AI 白名单审批（调用模型） | 未开始 |
 
 ## 交付物一览
 
@@ -21,7 +22,14 @@ AI 侧的「白名单审批」与「TodoList 盘问」还只有数据地基。
 | 权限与组件声明、包可见性 `<queries>` | `app/src/main/AndroidManifest.xml` |
 | 领域契约：会话模型 | `domain/model/ChatModel.kt` |
 | 领域契约：待办 / 豁免 / 权限 / 播报 | `domain/model/PolicyModels.kt` |
-| 策略仓库（同步判定 + Flow 暴露 + 播报通道） | `data/repository/AppPolicyRepository.kt` |
+| 策略仓库接口（同步判定 + Flow 暴露 + 播报通道） | `data/repository/AppPolicyRepository.kt` |
+| 策略仓库的 DataStore 实现 | `data/repository/DataStoreAppPolicyRepository.kt` |
+| Preferences DataStore 读写与 JSON 编解码 | `data/datastore/AppPreferencesDataSource.kt` |
+| AI 配置仓库（预设 / 选中项 / 生效配置） | `data/repository/AiConfigRepository.kt` |
+| OpenAI 兼容客户端（拉模型 / 测连接） | `core/network/OpenAiCompatibleClient.kt` |
+| AI 端点与预设的领域契约 | `domain/model/AiConfigModels.kt` |
+| AI 配置中心（ModalBottomSheet） | `ui/settings/AiConfigSheet.kt` |
+| 配置中心的 ViewModel | `ui/settings/AiConfigViewModel.kt` |
 | 依赖容器（手写 Service Locator） | `core/AppContainer.kt` |
 | 权限检查与系统设置跳转 | `core/permission/PermissionManager.kt` |
 | 全屏防沉迷遮罩 | `ui/overlay/LockOverlayController.kt` |
@@ -36,6 +44,7 @@ AI 侧的「白名单审批」与「TodoList 盘问」还只有数据地基。
 ## 技术栈
 
 - Kotlin 2.0.21 / Jetpack Compose（BOM 2024.12.01）/ Material 3
+- Preferences DataStore 1.1.7（持久化）+ OkHttp 4.12.0（网络）
 - AGP 8.7.3，Gradle 8.11.1，JDK 17
 - `compileSdk = 35`，`minSdk = 26`，`targetSdk = 35`
 - Clean Architecture 分层：`domain` / `data` / `core` / `ui` / `service`
@@ -73,8 +82,24 @@ AI 侧的「白名单审批」与「TodoList 盘问」还只有数据地基。
 
 `onAccessibilityEvent` 跑在主线程上，回调每迟到一帧，用户就多看到一帧目标应用的内容。
 DataStore 是异步 API，在这里挂起就等于放行。所以正确形态本来就是「内存里保一份权威
-快照，判定走同步读；持久化只是快照的备份」。下一阶段接 DataStore 时，只需新增一个
-实现同一接口的 `DataStoreAppPolicyRepository`，上层一行都不用改。
+快照，判定走同步读；持久化只是快照的备份」。阶段三接上 DataStore 时兑现了这一点：
+`DataStoreAppPolicyRepository` 实现同一个接口，上层（无障碍服务）一行都没改。
+
+数据流是这样的 ——
+```
+  DataStore（磁盘，唯一权威）
+       │  Flow 持续监听（后台协程）
+       ▼
+  内存快照  MutableStateFlow<List<...>>
+       │  同步 .value 读取
+       ▼
+  isAppWhitelisted()   ← 无障碍服务在主线程直接调，零挂起、零 IO
+
+  写路径：调用方 → 原子 edit 事务 → DataStore → Flow 回环 → 内存快照
+```
+**内存快照只由 Flow 回环写，写路径不直接改内存。** 看起来比「同时写内存」慢，但那点
+延迟在毫秒级，肉眼不可见；而省掉乐观写入就省掉了「磁盘写失败但内存以为成功了」这类
+最难查的不一致。单一事实来源比省一毫秒重要得多。
 
 **2. 系统常驻白名单是「静态清单 + 运行时解析」两层**
 
@@ -110,14 +135,18 @@ DataStore 是异步 API，在这里挂起就等于放行。所以正确形态本
 # 产物：app/build/outputs/apk/debug/app-debug.apk
 ```
 
-## 首次安装后的三步
+## 首次安装后的四步
 
 1. 打开应用 → 「+」→ **权限检查**，把 **无障碍服务** 与 **悬浮窗** 两项开掉
    （入口上有红点就说明还没配齐）；
 2. 回应用 → 「+」→ **强制锁定测试**，确认遮罩能盖满全屏、5 秒后自动解除；
-3. 「+」→ **待办与白名单**，看一眼当前的待办和豁免情况。
+3. 「+」→ **AI 配置**，选一个预设（DeepSeek / 本地 Ollama / OpenAI），填 Key，
+   点 **拉取** 选模型，再点 **测试连接**。成功会自动收起面板，并在会话里留下一条
+   `[系统] AI 终端握手成功，当前模型：…`；
+4. 「+」→ **待办与白名单**，看一眼当前的待办和豁免情况。
 
 之后打开任何不在白名单里的应用，都会被全屏遮罩压下；按返回键回到桌面。
+所有配置（白名单、待办、AI 端点）都会持久化，杀进程重开不会丢。
 
 ## 怎么重新生成图标
 
@@ -126,11 +155,43 @@ npm install sharp
 node tools/generate_icons.mjs
 ```
 
+## AI 配置中心
+
+底部「+」→ **AI 配置**，自底向上滑出。四段结构对应四个问题：
+
+| 区域 | 内容 |
+| --- | --- |
+| 预设栏 | 横向切换预设，支持新建（克隆当前草稿）与删除（内置预设不可删） |
+| 端点 | Base URL、API Key（可切换明文/密文） |
+| 模型 | 手填，或点「拉取」让端点自己报出模型列表后就地选择 |
+| 温度 | 滑块 0.0 ~ 1.5，步进 0.1 |
+
+**Base URL 只认一条规则**：以 `/v1` 结尾就用原样，否则补一个 `/v1`。所以
+`https://api.deepseek.com` 与 `https://api.deepseek.com/v1` 都能用。刻意不做
+「智能识别是否已有版本号」—— 像 `/api/v1`、`/openai/v1` 这类路径，任何猜测都会在
+某一家网关上翻车，而用户看到拼错的 URL 改一下就行，看到自作聪明的 URL 连从哪改起
+都不知道。
+
+**网络错误一律被翻译成中文**，界面上不会出现 `SocketTimeoutException`：
+401 → 「401 无效的 API Key」、超时 → 「连接超时：… 在 30 秒内没有响应」、
+404 → 「404 路径不存在，请检查 Base URL 是否包含 /v1」，并尽量附带服务端自己返回的
+`error.message`。失败时面板保持打开，错误显示为一行低饱和红字。
+
+**关于明文存储 Key**：现在把 Key 明文写进应用私有目录的 DataStore。更安全的
+EncryptedSharedPreferences 依赖 Android Keystore，而它在部分定制 ROM 上会随机失效，
+失效的后果是「用户的 Key 悄悄读不出来了」—— 对监督类应用来说比明文更糟。所以选明文，
+并在界面上明确告知。
+
+**关于明文 HTTP**：只放行 `127.0.0.1` / `localhost` / `10.0.2.2` 三个回环地址
+（见 `res/xml/network_security_config.xml`），云端端点必须走 HTTPS。局域网里的
+`http://192.168.x.x` 不在放行之列。
+
 ## 阶段边界（现在还没有的东西）
 
-- **没有 AI**：白名单审批（`grantTemporaryWhitelist`）接口已经就位，但还没有调用方；
-- **待办是样例数据**：仓库里预置了两条，只为让面板有东西可展示，等阶段三接上真正的
+- **还没有真正调用模型**：通信层只有 `fetchModels` 与 `testConnection` 两个方法，
+  白名单审批（`grantTemporaryWhitelist`）接口已经就位，但还没有调用方；
+- **待办仍是样例数据**：仓库里预置了两条，只为让面板有东西可展示，等接上真正的
   TodoList 盘问后应删掉；
-- **没有持久化**：白名单与待办都在内存里，进程被杀就回到初始状态；
 - **注视监控未实现**：`FocusMonitorService` 能正确进入前台态，但不会被自动拉起；
-- **没有 release 签名构建**，没有单元测试。
+- **没有 release 签名构建**，没有单元测试（JSON 编解码目前是纯函数，可直接测，
+  但 `org.json` 在 JVM 单测里不可用 —— 要补测试得先把它换成 kotlinx.serialization）。

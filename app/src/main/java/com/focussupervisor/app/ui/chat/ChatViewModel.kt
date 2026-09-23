@@ -160,11 +160,27 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
             ActionIds.POLICY_STATUS -> openDialog(ChatDialog.POLICY_STATUS)
 
+            ActionIds.AI_CONFIG -> {
+                // 「AI 配置中心」是 ModalBottomSheet，不走 ChatDialog。
+                // 先收起「+」面板，否则输入法弹起来之后面板还挂在 Sheet 底下。
+                _uiState.update {
+                    it.copy(
+                        isAiConfigSheetVisible = true,
+                        isActionPanelVisible = false,
+                    )
+                }
+            }
+
             else -> {
                 _uiState.update { it.copy(isActionPanelVisible = false) }
                 policy.publishNotice("触发入口：${action.label}（尚未实现）")
             }
         }
+    }
+
+    /** 关闭「AI 配置中心」。 */
+    fun onAiConfigSheetDismiss() {
+        _uiState.update { it.copy(isAiConfigSheetVisible = false) }
     }
 
     /** 关闭当前模态面板。 */

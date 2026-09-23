@@ -87,6 +87,10 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.kotlinx.coroutines.android)
 
+    // ---- 持久化 / 网络 ------------------------------------------------------
+    implementation(libs.androidx.datastore.preferences)
+    implementation(libs.okhttp)
+
     // ---- 生命周期 / ViewModel ----------------------------------------------
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.runtime.compose)   // collectAsStateWithLifecycle

@@ -190,6 +190,11 @@ class FocusAccessibilityService : AccessibilityService() {
         // 所以这类事件在这里就掐掉，既不解锁也不上锁。
         if (packageName in SystemWhitelist.TRANSIENT_WINDOW_PACKAGES) return
 
+        // 键盘同理：输入法弹出来会发一条窗口事件，但用户根本没换应用。
+        // 输入法是从系统动态解析出来的（用户启用的每一套都要算），所以不能只靠
+        // 上面那份静态清单。
+        if (policy.isInputMethod(packageName)) return
+
         evaluate(packageName, publishBlockNotice = true)
     }
 

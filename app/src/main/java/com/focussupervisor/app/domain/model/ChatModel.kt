@@ -89,6 +89,15 @@ enum class ChatDialog {
 }
 
 /**
+ * 「AI 配置中心」是一个 ModalBottomSheet 而不是对话框，所以它不放进 [ChatDialog]。
+ *
+ * 理由：那个面板内容长、需要滚动、还需要键盘把标题顶上去，用 BottomSheet 才能
+ * 拿到正确的避让行为；而 [ChatDialog] 里的两个都是「看一眼就关」的短信息。
+ * 用一个独立布尔量承载它，同时也就从类型上保证了它不会和那两个同时打开 ——
+ * 打开 Sheet 的入口在「+」面板里，而「+」面板打开时会先收起。
+ */
+
+/**
  * 监督会话在界面上的整体状态快照。
  *
  * 表现层只消费这一个不可变对象（配合 StateFlow），所有交互都是「发意图 → 归约
@@ -105,6 +114,7 @@ enum class ChatDialog {
  * @param todos 待办列表，供「待办与白名单」面板展示。
  * @param whitelist 当前生效的白名单（含临时豁免），同上。
  * @param overlayActive 全屏遮罩此刻是否挂着。顶栏副标题会据此变化。
+ * @param isAiConfigSheetVisible 「AI 配置中心」是否展开。
  */
 data class ChatUiState(
     val agentName: String = "FocusSupervisor",
@@ -118,6 +128,7 @@ data class ChatUiState(
     val todos: List<TodoItem> = emptyList(),
     val whitelist: List<WhitelistApp> = emptyList(),
     val overlayActive: Boolean = false,
+    val isAiConfigSheetVisible: Boolean = false,
 ) {
     /** 有非空白草稿时才允许发送，避免发出一条空消息。 */
     val canSend: Boolean get() = inputText.isNotBlank()

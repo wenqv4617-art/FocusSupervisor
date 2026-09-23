@@ -21,6 +21,13 @@ activityCompose = "1.9.3"
 composeBom = "2024.12.01"
 coroutines = "1.9.0"
 
+# ---- 持久化 / 网络 ---------------------------------------------------------
+# Preferences DataStore：白名单、待办、AI 配置的落盘位置。
+datastore = "1.1.7"
+# OkHttp：OpenAI 兼容端点的 HTTP 客户端。刻意不用 Retrofit —— 只有两个请求
+# （列模型、发一条测试消息），引入一整套注解处理器不划算。
+okhttp = "4.12.0"
+
 # ---- 测试 -----------------------------------------------------------------
 junit = "4.13.2"
 androidxJunit = "1.2.1"
@@ -44,6 +51,10 @@ androidx-compose-material3 = { group = "androidx.compose.material3", name = "mat
 # 只用图标「核心集」（约 50 个），刻意不引 material-icons-extended：
 # 那是个几万图标的巨型依赖，debug 构建会明显变慢、APK 也会虚胖。
 androidx-compose-material-icons-core = { group = "androidx.compose.material", name = "material-icons-core" }
+
+# ---- 持久化 / 网络 ---------------------------------------------------------
+androidx-datastore-preferences = { group = "androidx.datastore", name = "datastore-preferences", version.ref = "datastore" }
+okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
 
 # ---- 协程 -----------------------------------------------------------------
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }

@@ -63,6 +63,7 @@ import com.focussupervisor.app.ui.components.PermissionCheckDialog
 import com.focussupervisor.app.ui.components.PlusActionPanel
 import com.focussupervisor.app.ui.components.PolicyStatusDialog
 import com.focussupervisor.app.ui.components.defaultActionItems
+import com.focussupervisor.app.ui.settings.AiConfigSheet
 import com.focussupervisor.app.ui.theme.FocusSupervisorTheme
 import com.focussupervisor.app.ui.theme.FocusTheme
 
@@ -114,6 +115,7 @@ fun ChatRoute(
         onActionSelected = viewModel::onActionSelected,
         onDialogDismiss = viewModel::onDialogDismiss,
         onOpenPermissionSettings = viewModel::onOpenPermissionSettings,
+        onAiConfigDismiss = viewModel::onAiConfigSheetDismiss,
         modifier = modifier,
     )
 }
@@ -128,6 +130,7 @@ fun ChatRoute(
  * @param onActionSelected 点击面板里的某个功能。
  * @param onDialogDismiss 关闭模态面板。
  * @param onOpenPermissionSettings 请求跳转到某项权限的系统设置页。
+ * @param onAiConfigDismiss 关闭「AI 配置中心」。
  */
 @Composable
 fun ChatScreen(
@@ -138,6 +141,7 @@ fun ChatScreen(
     onActionSelected: (ActionItem) -> Unit,
     onDialogDismiss: () -> Unit,
     onOpenPermissionSettings: (PermissionTarget) -> Unit,
+    onAiConfigDismiss: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Scaffold(
@@ -187,6 +191,12 @@ fun ChatScreen(
         }
 
         null -> Unit
+    }
+
+    // 「AI 配置中心」自底向上滑出。它自带 ViewModel：配置编辑态和主会话状态是
+    // 两件互不相干的事，塞进 ChatViewModel 只会让那个类继续膨胀。
+    if (uiState.isAiConfigSheetVisible) {
+        AiConfigSheet(onDismiss = onAiConfigDismiss)
     }
 }
 
@@ -466,6 +476,7 @@ private fun ChatScreenPreview() {
             onActionSelected = {},
             onDialogDismiss = {},
             onOpenPermissionSettings = {},
+            onAiConfigDismiss = {},
         )
     }
 }
@@ -487,6 +498,7 @@ private fun ChatScreenPanelExpandedPreview() {
             onActionSelected = {},
             onDialogDismiss = {},
             onOpenPermissionSettings = {},
+            onAiConfigDismiss = {},
         )
     }
 }
