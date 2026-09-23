@@ -23,12 +23,22 @@ package com.focussupervisor.app.domain.model
  * @param model 模型 id，例如 `deepseek-chat`、`qwen2.5:7b`。
  * @param temperature 采样温度。允许 0.0 ~ 1.5：比常见 SDK 的 0~2 上限更窄，
  *        因为监督场景不需要更强的发散，而超过 1.5 之后模型的输出质量会明显下滑。
+ * @param embeddingModel 向量模型名，用于记忆检索。留空表示不做向量索引，
+ *        记忆会退回到关键词打分（见 `MemoryRepository`）。它和对话模型共用同一套
+ *        baseUrl / apiKey，因为绝大多数端点把两者放在同一个 `/v1` 下。
+ * @param prePrompt 前置提示。**在所有其它内容之前注入**，位置比人设、记忆、
+ *        待办都靠前。留空表示不注入。
+ *        它的定位是「用户自己写的一段全局设定」：语气风格、角色扮演的前置条件、
+ *        或者任何希望每轮都生效的约束。应用只负责把它原样放到最前面，
+ *        不解释、不过滤、不评价内容 —— 那是用户对自己这台设备上这个模型的设定权。
  */
 data class AiConfig(
     val baseUrl: String,
     val apiKey: String,
     val model: String,
     val temperature: Float,
+    val embeddingModel: String = "",
+    val prePrompt: String = "",
 ) {
     /** 是否已经填够了发起请求所需的最小信息。 */
     val isUsable: Boolean
@@ -98,6 +108,8 @@ object AiPresetDefaults {
                 apiKey = "",
                 model = "deepseek-chat",
                 temperature = AiConfig.DEFAULT_TEMPERATURE,
+                // DeepSeek 目前没有公开的 embeddings 接口，留空即走关键词召回。
+                embeddingModel = "",
             ),
         ),
         AiPreset(
@@ -108,6 +120,7 @@ object AiPresetDefaults {
                 apiKey = "",
                 model = "qwen2.5:7b",
                 temperature = AiConfig.DEFAULT_TEMPERATURE,
+                embeddingModel = "nomic-embed-text",
             ),
         ),
         AiPreset(
@@ -118,6 +131,7 @@ object AiPresetDefaults {
                 apiKey = "",
                 model = "gpt-4o-mini",
                 temperature = AiConfig.DEFAULT_TEMPERATURE,
+                embeddingModel = "text-embedding-3-small",
             ),
         ),
     )
@@ -134,6 +148,7 @@ object AiPresetDefaults {
             apiKey = "",
             model = "",
             temperature = AiConfig.DEFAULT_TEMPERATURE,
+            embeddingModel = "",
         ),
     )
 

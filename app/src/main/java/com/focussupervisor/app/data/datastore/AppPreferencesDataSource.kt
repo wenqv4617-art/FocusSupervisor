@@ -342,6 +342,9 @@ class AppPreferencesDataSource(context: Context) {
                         // org.json 只有 put(String, double)，Float 会被隐式提升；
                         // 读回来再转 Float，往返精度对 0.1 这种步进足够。
                         put(FIELD_TEMPERATURE, preset.config.temperature.toDouble())
+                        put(FIELD_EMBEDDING_MODEL, preset.config.embeddingModel)
+                        // 前置提示可能很长且含换行，JSON 会自己转义，不需要特殊处理。
+                        put(FIELD_PRE_PROMPT, preset.config.prePrompt)
                     },
                 )
             }
@@ -367,6 +370,8 @@ class AppPreferencesDataSource(context: Context) {
                                 FIELD_TEMPERATURE,
                                 com.focussupervisor.app.domain.model.AiConfig.DEFAULT_TEMPERATURE.toDouble(),
                             ).toFloat(),
+                            embeddingModel = obj.optString(FIELD_EMBEDDING_MODEL),
+                            prePrompt = obj.optString(FIELD_PRE_PROMPT),
                         ),
                     )
                 }
@@ -394,6 +399,8 @@ class AppPreferencesDataSource(context: Context) {
         private const val FIELD_API_KEY = "apiKey"
         private const val FIELD_MODEL = "model"
         private const val FIELD_TEMPERATURE = "temperature"
+        private const val FIELD_EMBEDDING_MODEL = "embeddingModel"
+        private const val FIELD_PRE_PROMPT = "prePrompt"
     }
 }
 
