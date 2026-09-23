@@ -9,21 +9,32 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import com.focussupervisor.app.core.time.TimeNarrator
 import com.focussupervisor.app.domain.model.PermissionStatus
 import com.focussupervisor.app.domain.model.PermissionTarget
 import com.focussupervisor.app.domain.model.SystemWhitelist
 import com.focussupervisor.app.domain.model.TodoItem
 import com.focussupervisor.app.domain.model.WhitelistApp
+import com.focussupervisor.app.ui.settings.SheetChip
+import com.focussupervisor.app.ui.settings.SheetPrimaryButton
+import com.focussupervisor.app.ui.settings.SheetTextField
 import com.focussupervisor.app.ui.theme.FocusSupervisorTheme
 import com.focussupervisor.app.ui.theme.FocusTheme
 import com.focussupervisor.app.ui.util.formatPlannedTime
@@ -196,7 +207,13 @@ fun PolicyStatusDialog(
     whitelist: List<WhitelistApp>,
     nowMillis: Long,
     onDismiss: () -> Unit,
+    onAddTodo: (String, Long) -> Unit = { _, _ -> },
+    onToggleTodo: (String, Boolean) -> Unit = { _, _ -> },
+    onDeleteTodo: (String) -> Unit = {},
 ) {
+    var draftTitle by remember { mutableStateOf("") }
+    var dueOption by remember { mutableStateOf(DueOption.ONE_HOUR) }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = FocusTheme.colors.chromeBackground,
@@ -215,11 +232,51 @@ fun PolicyStatusDialog(
                     .verticalScroll(rememberScrollState()),
             ) {
                 SectionTitle(text = "待办")
+
+                // ---- 新增一条 ----
+                //
+                // 放在列表**上面**而不是下面：用户进这个面板多半就是想加一条，
+                // 而把唯一的输入框放在一屏列表之后，他得先滑到底才能做事。
+                SheetTextField(
+                    label = "新的待办",
+                    value = draftTitle,
+                    onValueChange = { draftTitle = it },
+                    placeholder = "要做什么（例如：数学卷子第一套）",
+                )
+
+                Row(
+                    modifier = Modifier.padding(top = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    DueOption.entries.forEach { option ->
+                        SheetChip(
+                            text = option.label,
+                            selected = dueOption == option,
+                            onClick = { dueOption = option },
+                        )
+                    }
+                }
+
+                SheetPrimaryButton(
+                    text = "加入待办",
+                    enabled = draftTitle.isNotBlank(),
+                    onClick = {
+                        onAddTodo(draftTitle.trim(), dueOption.resolve(nowMillis))
+                        draftTitle = ""
+                    },
+                    modifier = Modifier.padding(top = 8.dp),
+                )
+
                 if (todos.isEmpty()) {
                     EmptyHint(text = "暂无待办。")
                 } else {
                     todos.forEach { todo ->
-                        TodoRow(todo = todo, nowMillis = nowMillis)
+                        TodoRow(
+                            todo = todo,
+                            nowMillis = nowMillis,
+                            onToggle = { done -> onToggleTodo(todo.id, done) },
+                            onDelete = { onDeleteTodo(todo.id) },
+                        )
                     }
                 }
 
@@ -283,31 +340,94 @@ private fun EmptyHint(text: String) {
  * 「已完成的不算逾期」这条规则只能有一个定义处。
  */
 @Composable
-private fun TodoRow(todo: TodoItem, nowMillis: Long) {
+private fun TodoRow(
+    todo: TodoItem,
+    nowMillis: Long,
+    onToggle: (Boolean) -> Unit,
+    onDelete: () -> Unit,
+) {
     val overdue = todo.isOverdueAt(nowMillis)
 
-    Column(modifier = Modifier.padding(vertical = 5.dp)) {
-        Text(
-            text = todo.title,
-            style = MaterialTheme.typography.bodyMedium,
-            color = FocusTheme.colors.textPrimary,
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Checkbox(
+            checked = todo.isDone,
+            onCheckedChange = onToggle,
+            colors = CheckboxDefaults.colors(
+                checkedColor = FocusTheme.colors.accent,
+                uncheckedColor = FocusTheme.colors.hairline,
+                checkmarkColor = Color.White,
+            ),
         )
-        Text(
-            text = buildString {
-                append("计划 ")
-                append(formatPlannedTime(todo.plannedAtMillis))
-                append(" · ")
-                append(
-                    when {
-                        todo.isDone -> "已完成"
-                        overdue -> "已逾期"
-                        else -> "待完成"
-                    },
-                )
-            },
-            style = MaterialTheme.typography.bodySmall,
-            color = if (overdue) FocusTheme.colors.attention else FocusTheme.colors.textSecondary,
-        )
+
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = todo.title,
+                style = MaterialTheme.typography.bodyMedium,
+                color = FocusTheme.colors.textPrimary,
+            )
+            Text(
+                text = buildString {
+                    append("计划 ")
+                    append(formatPlannedTime(todo.plannedAtMillis))
+                    append(" · ")
+                    append(
+                        when {
+                            todo.isDone -> "已完成"
+                            // 逾期要给出**几天**，只说「已逾期」等于没说 ——
+                            // 拖了一天和拖了一周，AI 该说的话完全不同。
+                            overdue -> "已逾期 " + overdueLabel(todo, nowMillis)
+                            else -> "待完成"
+                        },
+                    )
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = if (overdue && !todo.isDone) {
+                    FocusTheme.colors.attention
+                } else {
+                    FocusTheme.colors.textSecondary
+                },
+            )
+        }
+
+        TextButton(onClick = onDelete) {
+            Text(
+                text = "删除",
+                style = MaterialTheme.typography.bodySmall,
+                color = FocusTheme.colors.textSecondary,
+            )
+        }
+    }
+}
+
+/** 「已逾期」后面跟的那截。当天内逾期说「不到一天」，跨天说天数。 */
+private fun overdueLabel(todo: TodoItem, nowMillis: Long): String {
+    val days = TimeNarrator.dayOffset(todo.plannedAtMillis, nowMillis)
+    return if (days <= 0L) "不到一天" else "$days 天"
+}
+
+/**
+ * 「加入待办」时可选的截止时间。
+ *
+ * 只给三个纯算术区间（30 分钟 / 1 小时 / 3 小时），不做「今晚 20:00」这类
+ * 需要日历计算与夏令时判断的选项：待办的主体是**标题**，截止时间只要大致合理
+ * 就够用，而一个算错的「今晚」比「3 小时后」更让人困惑。要精确时间随时可以
+ * 让 AI 用指令改（它接受 `yyyy-MM-dd HH:mm`）。
+ */
+private enum class DueOption(val label: String) {
+    HALF_HOUR("30 分钟"),
+    ONE_HOUR("1 小时"),
+    THREE_HOURS("3 小时"),
+    ;
+
+    fun resolve(nowMillis: Long): Long = when (this) {
+        HALF_HOUR -> nowMillis + 30 * 60_000L
+        ONE_HOUR -> nowMillis + 60 * 60_000L
+        THREE_HOURS -> nowMillis + 180 * 60_000L
     }
 }
 

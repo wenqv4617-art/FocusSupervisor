@@ -95,6 +95,15 @@ interface AppPolicyRepository {
     /** 勾选 / 取消勾选一条待办。 */
     suspend fun setTodoDone(id: String, isDone: Boolean)
 
+    /**
+     * 删除一条待办。
+     *
+     * 「删除」与「标为完成」是两件不同的事，必须都留着：完成是**发生过**（进时间线、
+     * 算进今天的成绩），删除是**作废**（记错了、改主意了）。只给其中一个，用户就会
+     * 用另一个来凑合 —— 而两种凑合都会污染统计。
+     */
+    suspend fun removeTodo(id: String): Boolean
+
     /** 投递一条系统播报（会自动补 `[系统]` 前缀并截断长度）。 */
     fun publishNotice(text: String)
 

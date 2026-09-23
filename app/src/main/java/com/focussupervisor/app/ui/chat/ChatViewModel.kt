@@ -179,6 +179,34 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { it.copy(dialog = null) }
     }
 
+    // -----------------------------------------------------------------------
+    // 待办（用户手动增删勾）
+    // -----------------------------------------------------------------------
+
+    /**
+     * 手动加一条待办。
+     *
+     * 和 AI 走的是同一个仓库方法，所以时间线、播报、面板三处自动一致 ——
+     * 这也是为什么这些动作不该在界面层自己拼状态。
+     */
+    fun onAddTodo(title: String, plannedAtMillis: Long) {
+        val trimmed = title.trim()
+        if (trimmed.isEmpty()) return
+
+        viewModelScope.launch {
+            policy.addTodo(title = trimmed, plannedAtMillis = plannedAtMillis)
+            policy.publishNotice("记下待办：$trimmed")
+        }
+    }
+
+    fun onToggleTodo(id: String, isDone: Boolean) {
+        viewModelScope.launch { policy.setTodoDone(id, isDone) }
+    }
+
+    fun onDeleteTodo(id: String) {
+        viewModelScope.launch { policy.removeTodo(id) }
+    }
+
     fun onAiConfigSheetDismiss() = closeSheet(SheetTarget.AI_CONFIG)
 
     fun onPersonaSheetDismiss() = closeSheet(SheetTarget.PERSONA)

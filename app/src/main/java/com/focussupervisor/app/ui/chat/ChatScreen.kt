@@ -128,6 +128,9 @@ fun ChatRoute(
         onTimelineDismiss = viewModel::onTimelineSheetDismiss,
         onClearTimeline = viewModel::onClearTimeline,
         onGazeDismiss = viewModel::onGazeSheetDismiss,
+        onAddTodo = viewModel::onAddTodo,
+        onToggleTodo = viewModel::onToggleTodo,
+        onDeleteTodo = viewModel::onDeleteTodo,
         onMessageLongPress = viewModel::onMessageLongPress,
         onMessageActionDismiss = viewModel::onMessageActionDismiss,
         onMessageEditRequested = viewModel::onMessageEditRequested,
@@ -181,6 +184,11 @@ fun ChatScreen(
     onTimelineDismiss: () -> Unit,
     onClearTimeline: () -> Unit,
     onGazeDismiss: () -> Unit,
+    // 待办的三个手动操作。给了默认值是为了让 @Preview 不必逐个补齐 ——
+    // 预览里点不动任何东西，传空实现即可。
+    onAddTodo: (String, Long) -> Unit = { _, _ -> },
+    onToggleTodo: (String, Boolean) -> Unit = { _, _ -> },
+    onDeleteTodo: (String) -> Unit = {},
     onMessageLongPress: (ChatMessage) -> Unit,
     onMessageActionDismiss: () -> Unit,
     onMessageEditRequested: () -> Unit,
@@ -236,6 +244,9 @@ fun ChatScreen(
                 whitelist = uiState.whitelist,
                 nowMillis = nowMillis,
                 onDismiss = onDialogDismiss,
+                onAddTodo = onAddTodo,
+                onToggleTodo = onToggleTodo,
+                onDeleteTodo = onDeleteTodo,
             )
         }
 
