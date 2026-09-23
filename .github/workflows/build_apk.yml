@@ -1,0 +1,82 @@
+# ============================================================================
+#  FocusSupervisor —— 自动打包 debug APK
+#
+#  触发：push 到 main，或在 Actions 页面手动 workflow_dispatch。
+#  产物：app-debug.apk，作为 artifact 上传，保留 7 天，用户在网页上自行下载。
+#
+#  刻意只打 debug：debug 包由 AGP 用自动生成的 debug 密钥签名，装得上、可直接
+#  覆盖安装；release 需要签名密钥，等仓库 Secrets 配好之后再加一个 job。
+# ============================================================================
+
+name: Build Debug APK
+
+on:
+  push:
+    branches: [main]
+  # 手动触发：Actions → 左侧选本 workflow → Run workflow。
+  workflow_dispatch:
+
+# 同一分支上新的推送会取消还在跑的旧构建，省 Actions 额度。
+concurrency:
+  group: build-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  assemble-debug:
+    name: assembleDebug
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 配置 JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: 配置 Android SDK
+        # runner 上虽有预装 SDK，但这一步会补全 cmdline-tools 并接受 license，
+        # 使 AGP 在缺少 platforms/build-tools 时能自动下载，避免环境差异导致红。
+        uses: android-actions/setup-android@v3
+
+      - name: 配置 Gradle 缓存
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: 环境自检
+        run: |
+          java -version
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          ./gradlew --version
+
+      - name: 赋予 gradlew 执行权限
+        run: chmod +x ./gradlew
+
+      - name: 编译 debug APK
+        run: ./gradlew assembleDebug --stacktrace
+
+      - name: 列出产物（便于排查）
+        if: always()
+        run: find app/build/outputs -type f -name '*.apk' -print 2>/dev/null || true
+
+      - name: 上传 app-debug.apk
+        uses: actions/upload-artifact@v4
+        with:
+          name: FocusSupervisor-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 7
+
+      - name: 构建失败时上传日志
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: |
+            **/build/reports/**
+            **/build/outputs/logs/**
+          retention-days: 7
+          if-no-files-found: ignore

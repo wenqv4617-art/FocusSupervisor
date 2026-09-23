@@ -1,0 +1,33 @@
+# ---- Gradle / Android ------------------------------------------------------
+.gradle/
+build/
+app/build/
+local.properties
+captures/
+.externalNativeBuild/
+.cxx/
+*.hprof
+
+# ---- IDE -------------------------------------------------------------------
+.idea/
+*.iml
+*.iws
+*.ipr
+.vscode/
+.DS_Store
+
+# ---- 密钥：绝不入库 --------------------------------------------------------
+*.jks
+*.keystore
+keystore.properties
+secrets.properties
+
+# ---- 图标生成脚本的临时依赖（tools/generate_icons.mjs 用）-------------------
+node_modules/
+
+# ---- 构建中间产物 ----------------------------------------------------------
+*.apk
+*.aab
+*.ap_
+*.dex
+output.json

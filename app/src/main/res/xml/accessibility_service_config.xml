@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  无障碍服务运行期配置。
+  这些值决定了系统会回调哪些事件、服务能读多少内容，直接写在这里比在
+  onServiceConnected() 里 setServiceInfo() 更清晰、也更容易被打包工具静态检查到。
+
+  骨架阶段刻意「多要一点、少做一点」：
+  事件类型覆盖窗口切换与内容变化（识别前台 App 的最小集合），
+  但不监听 typeAllMask，避免无关事件造成耗电与隐私面扩大。
+-->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagDefault|flagReportViewIds|flagRetrieveInteractiveWindows"
+    android:canRetrieveWindowContent="true"
+    android:description="@string/accessibility_service_description"
+    android:notificationTimeout="100"
+    android:summary="@string/accessibility_service_label" />

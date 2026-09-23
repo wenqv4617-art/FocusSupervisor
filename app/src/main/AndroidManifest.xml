@@ -1,0 +1,123 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  ============================================================================
+   FocusSupervisor —— 权限与组件声明
+
+   设计原则：所有「敏感能力」都在这里显式声明，并在注释里写清楚它服务于哪个
+   业务环节、运行期还需要用户在哪一步手动授权。骨架阶段只声明、不启用。
+  ============================================================================
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- ======================================================================
+         1) 应用锁：在其他应用之上绘制悬浮遮罩
+         授权方式：Settings.ACTION_MANAGE_OVERLAY_PERMISSION（特殊权限，非运行时弹窗）
+         ====================================================================== -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+
+    <!-- ======================================================================
+         2) 使用时长统计：读取前台应用与使用时长
+         授权方式：Settings.ACTION_USAGE_ACCESS_SETTINGS（特殊权限）
+         PACKAGE_USAGE_STATS 是 signature|privileged 级权限，普通应用只能引导
+         用户手动开启，因此必须 tools:ignore 掉 ProtectedPermissions 检查。
+         ====================================================================== -->
+    <uses-permission
+        android:name="android.permission.PACKAGE_USAGE_STATS"
+        tools:ignore="ProtectedPermissions" />
+
+    <!-- ======================================================================
+         3) 摄像头视线检测：判断用户是否在看屏幕（离开则收紧策略）
+         运行时权限：CAMERA，需在界面里动态申请
+         ====================================================================== -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <!-- FOREGROUND_SERVICE_CAMERA 是 API 34 起新增的前台服务类型权限 -->
+    <uses-permission
+        android:name="android.permission.FOREGROUND_SERVICE_CAMERA"
+        tools:targetApi="34" />
+    <!-- 前台服务基础权限：Android 9 起 targetSdk >= 28 就必须声明 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+
+    <!-- 摄像头不是硬性要求：没有摄像头的设备照样能装，只是用不了视线检测 -->
+    <uses-feature
+        android:name="android.hardware.camera"
+        android:required="false" />
+
+    <!-- ======================================================================
+         4) 保活白名单：引导用户把应用加入电池优化例外
+         授权方式：Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS
+         ====================================================================== -->
+    <uses-permission
+        android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"
+        tools:ignore="BatteryLife" />
+
+    <!-- ======================================================================
+         5) 通知：前台服务常驻通知（Android 13 起为运行时权限）
+         ====================================================================== -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- ======================================================================
+         6) 后续阶段预留（暂不申请，先在此登记，避免以后翻代码找不着）：
+            - QUERY_ALL_PACKAGES            应用识别（上架需专项说明，谨慎启用）
+            - RECEIVE_BOOT_COMPLETED        开机自启恢复监督
+            - SCHEDULE_EXACT_ALARM          定时强制锁屏
+         ====================================================================== -->
+
+    <application
+        android:name=".FocusSupervisorApp"
+        android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.FocusSupervisor">
+
+        <!-- 唯一入口：承载 Compose 聊天主界面 -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- ==================================================================
+             无障碍服务骨架
+             --------------------------------------------------------------
+             用途：监听窗口变化以识别「进入了哪个 App」，并在需要时执行返回 /
+             回桌面等操作。这是整个监督能力的核心入口。
+             注意：exported 必须为 true，且必须由系统以 BIND_ACCESSIBILITY_SERVICE
+             权限绑定；用户只能在「设置 → 无障碍」里手动开启，应用无法自行开启。
+             ================================================================== -->
+        <service
+            android:name=".service.FocusAccessibilityService"
+            android:exported="true"
+            android:label="@string/accessibility_service_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
+
+        <!-- ==================================================================
+             前台监督服务骨架（占位）
+             --------------------------------------------------------------
+             foregroundServiceType=camera 是因为该服务最终要持有摄像头做视线
+             检测；真正 startForeground 时必须在 3 个参数的重载里声明同一类型，
+             否则 Android 14+ 会抛 MissingForegroundServiceTypeException。
+             ================================================================== -->
+        <service
+            android:name=".service.FocusMonitorService"
+            android:exported="false"
+            android:foregroundServiceType="camera"
+            tools:targetApi="29" />
+
+    </application>
+
+</manifest>

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  应用主题。
+  纯 Compose 应用不需要 AppCompat / Material Components 的主题父类，直接用平台
+  主题即可，省掉一个依赖；窗口里的所有视觉都由 Compose 自己画。
+
+  刻意不设置 statusBarColor / navigationBarColor：这两个属性在 API 35 已被废弃，
+  且边到边（edge-to-edge）模式下系统会忽略它们。状态栏与导航栏的底色、图标明暗
+  由 MainActivity 里的 enableEdgeToEdge() 统一托管。
+-->
+<resources>
+
+    <style name="Theme.FocusSupervisor" parent="android:Theme.Material.Light.NoActionBar">
+        <!-- 冷启动时窗口背景先亮起来，避免白屏闪一下 -->
+        <item name="android:windowBackground">@color/window_background</item>
+    </style>
+
+</resources>

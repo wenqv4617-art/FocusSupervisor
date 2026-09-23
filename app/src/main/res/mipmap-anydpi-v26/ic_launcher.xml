@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  自适应启动图标（API 26+）。现代启动器一律走这里，
+  同目录下的 mipmap-<density>/ic_launcher.png 只是给 API 25 及更老系统兜底。
+
+  分层策略见 tools/generate_icons.mjs 的文件头：
+  - foreground 是设计稿本体，缩到 108dp 画布的 74dp（略大于系统最大遮罩 72dp），
+    于是圆形遮罩下等价于「把图标裁成圆」，方形遮罩下图案自身的圆角与遮罩圆角重合；
+  - background 是图案边缘色向外延展再重模糊得到的渐变场，专门用来兜住那些
+    遮罩比 72dp 还大的非标准启动器，正常情况下它完全被前景盖住。
+-->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@mipmap/ic_launcher_background" />
+    <foreground android:drawable="@mipmap/ic_launcher_foreground" />
+</adaptive-icon>

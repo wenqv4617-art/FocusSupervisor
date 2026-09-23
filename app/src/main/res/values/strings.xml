@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">FocusSupervisor</string>
+
+    <!-- 无障碍服务：这两条会原样显示在系统「无障碍」设置页里，措辞要让用户看得懂 -->
+    <string name="accessibility_service_label">FocusSupervisor 监督服务</string>
+    <string name="accessibility_service_description">用于识别当前打开的应用，并在你设定的规则被触发时给出提醒或拦截。开启后本服务仅在设备本地处理信息，不会上传任何内容。</string>
+
+    <!-- 前台服务常驻通知 -->
+    <string name="monitor_notification_channel_name">监督服务</string>
+    <string name="monitor_notification_channel_description">保持监督能力在后台运行的常驻通知</string>
+    <string name="monitor_notification_title">FocusSupervisor 正在监督</string>
+    <string name="monitor_notification_text">视线感知与使用时长统计已就绪</string>
+</resources>
