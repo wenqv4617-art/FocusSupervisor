@@ -90,7 +90,6 @@ fun AiConfigSheet(
             onTemperatureChange = viewModel::onTemperatureChange,
             onToggleApiKeyVisibility = viewModel::toggleApiKeyVisibility,
             onFetchModels = viewModel::fetchModels,
-            onFetchEmbeddingModels = viewModel::fetchEmbeddingModels,
             onModelPicked = viewModel::onModelPicked,
             onModelPickerDismiss = viewModel::onModelPickerDismiss,
             onSaveCurrent = viewModel::saveCurrentPreset,
