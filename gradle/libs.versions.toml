@@ -29,14 +29,25 @@ datastore = "1.1.7"
 okhttp = "4.12.0"
 
 # ---- 摄像头 / 视觉 ---------------------------------------------------------
-# CameraX 1.4.2：与 compileSdk 35 / AGP 8.7.3 同一代的稳定版本。
-# 不追 1.5 / 1.6：那两条线要求 compileSdk 36，而本工程锁在 35。
+# CameraX 1.4.2：minCompileSdk 34 / minAGP 1.0，本工程（compileSdk 35 + AGP 8.7.3）
+# 完全够用。为什么不追新：
+#   - 1.6.x 要求 compileSdk 36 + AGP 8.9.1，用不了；
+#   - 1.5.x 能用（minCompileSdk 35），但它自 1.5.0-alpha04 起改用 JSpecify 类型注解，
+#     Kotlin 2.0.21 编译时会刷一批 jspecify 告警。本工程的标准是零告警，
+#     所以停在 1.4.2；将来升 Kotlin 2.1+（jspecify 默认 strict）再一起升到 1.5.3。
 # 只引 core / camera2 / lifecycle，**不引 camera-view** ——
-# 后台注视检测不需要预览画面，少一个依赖少一份体积。
+# 后台注视检测没有预览画面，少一个依赖少一份体积。
 camera = "1.4.2"
-# ML Kit 人脸检测（**打包版**）。选 com.google.mlkit 而不是
-# com.google.android.gms:play-services-mlkit-face-detection：前者把模型打进 APK
-# （约 +3~4MB），不依赖 Google Play 服务 —— 国产 ROM 上后者可能根本下不到模型。
+# ML Kit 人脸检测（**模型打包版**）。
+#
+# 选 com.google.mlkit 而不是 com.google.android.gms:play-services-mlkit-face-detection：
+# 后者只有 330 KB，但模型要靠 Google Play 服务在运行时下载，没有 GMS 的机型直接不可用。
+# 打包版把 .so 与模型放进 APK（官方口径 +6.9 MB，实测 AAR 约 16.9 MiB）。
+#
+# ⚠️ 但**不能**就此宣称「打包版不需要 GMS」：它的 POM 仍然传递依赖
+# play-services-base / -basement / -tasks 等支撑库，官方也没有一句明文保证无 GMS 可用。
+# 所以代码里对初始化与检测失败都做了兜底（失败只发一条错误状态，不影响其它功能），
+# 真机是国产无 GMS ROM 的话需要实测一次。
 mlkitFace = "16.1.7"
 
 # ---- 测试 -----------------------------------------------------------------

@@ -48,6 +48,15 @@ android {
         // 目前只有中英两种文案，锁一下资源配置能让 APK 更小、构建更快。
         resourceConfigurations += listOf("en", "zh")
 
+        // 只保留真机用得上的两种 ABI。
+        //
+        // ML Kit 的打包版带了四个架构的人脸检测原生库（x86 与 x86_64 各约 9.6 MB，
+        // 那是给模拟器用的）。用户的手机不是 arm64-v8a 就是 armeabi-v7a，
+        // 留下这两个足以让包小一半——而这个包已经因为人脸模型变大了。
+        ndk {
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+        }
+
         vectorDrawables { useSupportLibrary = true }
     }
 
