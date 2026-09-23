@@ -228,7 +228,13 @@ class AppPreferencesDataSource(context: Context) {
          */
         const val CURRENT_SCHEMA_VERSION = 1
 
-        private const val DATASTORE_NAME = "focus_supervisor_preferences"
+        /**
+         * DataStore 文件名。
+         *
+         * `internal` 而不是 `private`：文件末尾那个顶层 `preferencesDataStore` 委托
+         * 需要引用它，而**companion 里的 private 成员对同文件的顶层声明不可见**。
+         */
+        internal const val DATASTORE_NAME = "focus_supervisor_preferences"
 
         private val KEY_WHITELIST = stringPreferencesKey("whitelist_json")
         private val KEY_TODOS = stringPreferencesKey("todos_json")

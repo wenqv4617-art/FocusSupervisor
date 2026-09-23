@@ -131,7 +131,12 @@ internal class CriticalPackageResolver(private val context: Context) {
             ?.enabledInputMethodList
             ?.map { it.packageName }
             ?.toSet()
-    }.getOrDefault(emptySet())
+    }
+        // 链式调用里全是 `?.`，lambda 的结果本身就可空，所以 runCatching 得到的是
+        // Result<Set<String>?>。用 getOrNull().orEmpty() 落回非空集合，
+        // 而不是 getOrDefault —— 后者在可空结果下仍然返回可空类型。
+        .getOrNull()
+        .orEmpty()
 
     private fun queryPackages(intent: Intent): List<String> {
         val infos: List<ResolveInfo> = runCatching {
