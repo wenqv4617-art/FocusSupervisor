@@ -42,6 +42,8 @@ data class GazeUiState(
     val isApiKeyVisible: Boolean = false,
     val isSaving: Boolean = false,
     val isTesting: Boolean = false,
+    val isFetchingModels: Boolean = false,
+    val fetchedModels: List<String> = emptyList(),
     val message: String? = null,
     val isMessageError: Boolean = true,
     val canCaptureScreen: Boolean = false,
@@ -83,6 +85,7 @@ class GazeViewModel(application: Application) : AndroidViewModel(application) {
     val uiState: StateFlow<GazeUiState> = _uiState.asStateFlow()
 
     private var testJob: Job? = null
+    private var fetchJob: Job? = null
 
     init {
         observeGaze()
@@ -296,4 +299,54 @@ class GazeViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun onMessageShown() = _uiState.update { it.copy(message = null) }
+
+    // -----------------------------------------------------------------------
+    // 拉取模型列表
+    // -----------------------------------------------------------------------
+
+    /**
+     * 让端点自己报出可用的模型名。
+     *
+     * 和对话配置里的「拉取」是同一套逻辑（打 `/models`）。它比手填重要得多：
+     * 各家多模态模型的命名差异很大（qwen-vl-plus / glm-4v-flash / gpt-4o-mini…），
+     * 手填一个不存在的名字，报错往往是「模型不存在」这种不带候选的提示，
+     * 用户只能靠猜。
+     */
+    fun fetchVisionModels() {
+        val draft = _uiState.value.draft
+        if (draft.baseUrl.isBlank()) {
+            _uiState.update { it.copy(message = "先填 Base URL", isMessageError = true) }
+            return
+        }
+
+        fetchJob?.cancel()
+        fetchJob = viewModelScope.launch {
+            _uiState.update { it.copy(isFetchingModels = true, message = null) }
+            val result = client.fetchModels(baseUrl = draft.baseUrl, apiKey = draft.apiKey)
+            _uiState.update { state ->
+                result.fold(
+                    onSuccess = { models ->
+                        state.copy(
+                            isFetchingModels = false,
+                            fetchedModels = models,
+                            message = if (models.isEmpty()) "端点没有返回任何模型" else "拉到 ${models.size} 个模型",
+                            isMessageError = models.isEmpty(),
+                        )
+                    },
+                    onFailure = { throwable ->
+                        state.copy(
+                            isFetchingModels = false,
+                            message = (throwable as? AiClientException)?.message ?: "拉取失败",
+                            isMessageError = true,
+                        )
+                    },
+                )
+            }
+        }
+    }
+
+    /** 从拉取结果里选一个填进模型名。 */
+    fun pickVisionModel(model: String) {
+        _uiState.update { it.copy(draft = it.draft.copy(model = model)) }
+    }
 }

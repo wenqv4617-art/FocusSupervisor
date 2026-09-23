@@ -26,6 +26,7 @@ import com.focussupervisor.app.MainActivity
 import com.focussupervisor.app.R
 import com.focussupervisor.app.appContainer
 import com.focussupervisor.app.core.network.OpenAiCompatibleClient
+import com.focussupervisor.app.core.time.TimeNarrator
 import com.focussupervisor.app.core.vision.GazeAnalyzer
 import com.focussupervisor.app.core.vision.GazeEstimator
 import com.focussupervisor.app.core.vision.GazeReading
@@ -136,6 +137,9 @@ class FocusMonitorService : LifecycleService() {
      * 就是在骗人。屏幕点亮导致的重新绑定不会置这个位，所以也不会重复播报。
      */
     private var pendingStartAnnouncement = false
+
+    /** 上一次发布状态时的日历天。跨天时用它把今日累计归零，见 [rolloverDayIfNeeded]。 */
+    private var currentDayKey = ""
 
     private val screenReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -440,6 +444,8 @@ class FocusMonitorService : LifecycleService() {
      * StateFlow 在没有收集者时写入几乎不花代价，而面板打开时它本来就需要刷新。
      */
     private fun publishStatus(state: GazeState, continuousMillis: Long = 0L) {
+        rolloverDayIfNeeded(state)
+
         gaze.publishStatus(
             VisionStatus(
                 state = state,
@@ -447,6 +453,34 @@ class FocusMonitorService : LifecycleService() {
                 todayFocusMillis = todayFocusMillis,
             ),
         )
+    }
+
+    /**
+     * 跨天：把「今日累计注视」归零。
+     *
+     * 判据是**日历天**而不是「距上次归零满 24 小时」：昨晚 23:50 与今天 00:10 只差
+     * 20 分钟，但必须算两天 —— 深夜恰恰是使用最密集的时段，按 24 小时判会把它整段
+     * 算进前一天，错得最难被发现（理由详见 `TimeNarrator.dayKey`）。
+     *
+     * 跨天时如果人还在连续注视，本轮时长要**从零点重新起算**：跨零点的那一段
+     * 属于昨天，而昨天的数字已经被丢掉了，不重算会让今天的累计凭空多出几十分钟。
+     * 代价是最多少算一帧（0.7 秒），可以忽略。
+     *
+     * 注意这里**不重置连续注视时长本身** —— 连续盯了 45 分钟就是 45 分钟，
+     * 跟有没有跨过零点无关。
+     */
+    private fun rolloverDayIfNeeded(state: GazeState) {
+        val now = System.currentTimeMillis()
+        val dayKey = TimeNarrator.dayKey(now)
+        if (dayKey == currentDayKey) return
+
+        val isFirstRun = currentDayKey.isEmpty()
+        currentDayKey = dayKey
+        if (isFirstRun) return
+
+        todayFocusMillis = 0L
+        if (state == GazeState.LOOKING) lookingStartedAtMillis = now
+        Log.i(TAG, "跨天：今日累计注视已归零（$dayKey）")
     }
 
     /**

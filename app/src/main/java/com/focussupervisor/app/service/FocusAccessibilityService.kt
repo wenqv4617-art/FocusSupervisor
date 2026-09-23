@@ -689,13 +689,20 @@ class FocusAccessibilityService : AccessibilityService() {
         /**
          * 截图缩放后的最大宽度（像素）。
          *
-         * 这一条直接决定发给视觉模型的 token 数量。手机截图以文字为主，720 宽足够
-         * 看清「他在刷什么」，再大只是让每一次注视都更贵、更慢。
+         * 720 宽时模型基本读不清界面上的文字，只能说出「他在刷一个信息流」这种
+         * 没用的结论 —— 截图的意义就在于让 AI 知道**他在具体做什么**，读不到字
+         * 等于白传。1080 是「文字可读」与「体积可控」的平衡点：一张手机截图
+         * 压完约 150~250 KB，而上传本身有 3 分钟的冷却，这个量级完全承受得起。
          */
-        private const val SCREENSHOT_MAX_WIDTH = 720
+        private const val SCREENSHOT_MAX_WIDTH = 1080
 
-        /** JPEG 压缩质量。70 是文字可读性与体积的常用折中点。 */
-        private const val SCREENSHOT_QUALITY = 70
+        /**
+         * JPEG 压缩质量。
+         *
+         * 80 而不是 70：手机截图以文字与细线为主，正是 JPEG 最容易出块效应的地方，
+         * 70 会把小字糊掉。多出来的二三十 KB 换模型能看清内容，划算。
+         */
+        private const val SCREENSHOT_QUALITY = 80
 
         /**
          * 本应用唯一 Activity 的类名。

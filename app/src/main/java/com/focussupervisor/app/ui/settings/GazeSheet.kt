@@ -1,11 +1,13 @@
 package com.focussupervisor.app.ui.settings
 
+import android.Manifest
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -36,18 +38,20 @@ import com.focussupervisor.app.ui.theme.FocusTheme
  * 注视监控面板。
  *
  * ===========================================================================
- * 这个面板要回答的三个问题
+ * 这个面板的顺序就是它的逻辑
  * ===========================================================================
- * ```
- *   ┌ 现在在不在看 ┐   它此刻判定成什么？有没有出错？摄像头权限有没有？
- *   ┌ 要不要上传   ┐   截屏发给外部端点，这是一个用户必须自己做的决定
- *   ┌ 判定参数     ┐   抽帧多快、头偏多少算没在看
- *   ┌ 视觉模型     ┐   用哪一家（和对话端点不是同一家）
- * ```
+ * 上一版把「状态、上传、参数、视觉模型」四块平铺在一列里，看起来都对，但用户
+ * 看完不知道**它到底会不会截图、什么时候截图** —— 那正是这个功能唯一需要用户
+ * 想清楚的事。所以现在按因果重排：
  *
- * 「要不要上传」单独成段并给出明确后果，是因为这是整个应用里唯一会把**屏幕内容**
- * 送出设备的功能。默认关闭，打开时不需要二次确认弹窗 —— 但文案必须把话说全，
- * 让用户在同一个屏幕上就能理解自己在同意什么。
+ * ```
+ *   ① 现在会发生什么   ← 一句话结论：它此刻会做什么、不会做什么
+ *   ② 感知             ← 摄像头与判定参数（决定「知不知道你在看」）
+ *   ③ 上报             ← 截图与视觉模型（决定「要不要把屏幕发出去」）
+ * ```
+ * ② 是 ③ 的前提：不打开感知，上报那一整块根本不会触发。面板上也按这个顺序排，
+ * 并且在 ③ 里直接写清「没配视觉模型时截图不会产生描述」这种失败态 ——
+ * 让用户在同一个屏幕上就能把因果关系看完。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -66,8 +70,7 @@ fun GazeSheet(
         contract = ActivityResultContracts.RequestPermission(),
     ) { granted ->
         viewModel.refreshPermission()
-        // 用户点了「允许」就顺手把开关打开 —— 他刚才的意图已经表达得很清楚了，
-        // 再让他去拨一次开关是多余的。
+        // 用户点了「允许」就顺手把开关打开 —— 他刚才的意图已经表达得很清楚了。
         if (granted) viewModel.setEnabled(true)
     }
 
@@ -82,7 +85,7 @@ fun GazeSheet(
             uiState = uiState,
             onToggleEnabled = { enabled ->
                 if (enabled && !uiState.hasCameraPermission) {
-                    permissionLauncher.launch(android.Manifest.permission.CAMERA)
+                    permissionLauncher.launch(Manifest.permission.CAMERA)
                 } else {
                     viewModel.setEnabled(enabled)
                 }
@@ -90,12 +93,14 @@ fun GazeSheet(
             onToggleUpload = viewModel::setUploadScreenshots,
             onAnalyzeIntervalChange = viewModel::setAnalyzeInterval,
             onToleranceChange = viewModel::setTolerance,
-            onRequestCamera = { permissionLauncher.launch(android.Manifest.permission.CAMERA) },
+            onRequestCamera = { permissionLauncher.launch(Manifest.permission.CAMERA) },
             onBaseUrlChange = viewModel::onVisionBaseUrlChange,
             onApiKeyChange = viewModel::onVisionApiKeyChange,
             onModelChange = viewModel::onVisionModelChange,
             onPromptChange = viewModel::onVisionPromptChange,
             onToggleApiKey = viewModel::toggleApiKeyVisibility,
+            onFetchModels = viewModel::fetchVisionModels,
+            onPickModel = viewModel::pickVisionModel,
             onSaveVision = viewModel::saveVisionConfig,
             onTestVision = viewModel::testVisionConnection,
             onClose = onDismiss,
@@ -116,6 +121,8 @@ private fun GazeContent(
     onModelChange: (String) -> Unit,
     onPromptChange: (String) -> Unit,
     onToggleApiKey: () -> Unit,
+    onFetchModels: () -> Unit,
+    onPickModel: (String) -> Unit,
     onSaveVision: () -> Unit,
     onTestVision: () -> Unit,
     onClose: () -> Unit,
@@ -142,19 +149,25 @@ private fun GazeContent(
             }
         }
 
-        // ---------------- 运行状态 ----------------
+        // ---------------- ① 现在会发生什么 ----------------
         SheetSection(
-            title = "运行状态",
+            title = "现在会发生什么",
             subtitle = uiState.lastError,
         ) {
+            Text(
+                text = conclusion(uiState),
+                style = MaterialTheme.typography.bodyMedium,
+                color = FocusTheme.colors.textPrimary,
+            )
+
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = uiState.status.state.label,
-                        style = MaterialTheme.typography.bodyLarge,
+                        text = "摄像头判定：${uiState.status.state.label}",
+                        style = MaterialTheme.typography.bodyMedium,
                         color = FocusTheme.colors.textPrimary,
                     )
                     Text(
@@ -180,11 +193,17 @@ private fun GazeContent(
                     color = FocusTheme.colors.textPrimary,
                 )
             }
+        }
 
+        // ---------------- ② 感知 ----------------
+        SheetSection(
+            title = "感知",
+            subtitle = "决定「它知不知道你在看屏幕」。画面只在设备本地处理，用完即弃，不落盘。",
+        ) {
             if (!uiState.hasCameraPermission) {
                 Text(
-                    text = "缺少摄像头权限。没有它，摄像头无法在后台工作 —— " +
-                        "Android 要求 camera 类型的前台服务必须先拿到这个权限。",
+                    text = "缺少摄像头权限。Android 要求 camera 类型的前台服务必须先拿到它，" +
+                        "否则连服务都起不来 —— 这是硬前提，不是可选项。",
                     style = MaterialTheme.typography.bodySmall,
                     color = FocusTheme.colors.textSecondary,
                 )
@@ -195,58 +214,6 @@ private fun GazeContent(
                 )
             }
 
-            if (!uiState.canCaptureScreen) {
-                Text(
-                    text = "没有截屏能力（无障碍服务未开启，或系统低于 Android 11）。" +
-                        "注视仍然会被记录，只是不会产生视觉描述。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = FocusTheme.colors.textSecondary,
-                )
-            }
-        }
-
-        // ---------------- 截图上传 ----------------
-        SheetSection(
-            title = "截图上传",
-            subtitle = "判定为「正在注视」时，截取当前屏幕并发给视觉模型，让 AI 知道他在做什么。",
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = if (uiState.config.uploadScreenshots) "已开启" else "已关闭",
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = FocusTheme.colors.textPrimary,
-                    )
-                    Text(
-                        text = if (uiState.config.uploadScreenshots) {
-                            "截图会离开这台设备。抖音、微信、相册里的内容都可能被一起发出去 —— " +
-                                "只在你能接受这一点时保持开启。"
-                        } else {
-                            "只在本机记录「在看 / 没在看」，不出设备。"
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = FocusTheme.colors.textSecondary,
-                    )
-                }
-                Switch(
-                    checked = uiState.config.uploadScreenshots,
-                    onCheckedChange = onToggleUpload,
-                    colors = SwitchDefaults.colors(
-                        checkedThumbColor = FocusTheme.colors.accent,
-                        checkedTrackColor = FocusTheme.colors.accent.copy(alpha = 0.4f),
-                    ),
-                )
-            }
-        }
-
-        // ---------------- 判定参数 ----------------
-        SheetSection(
-            title = "判定参数",
-            subtitle = "默认值偏保守：宁可少记几次，也不要在你只是路过屏幕时刷出一堆记录。",
-        ) {
             Text(
                 text = "抽帧间隔",
                 style = MaterialTheme.typography.bodyMedium,
@@ -278,23 +245,82 @@ private fun GazeContent(
             }
 
             Text(
-                text = "抽帧越慢越省电，但「拿起手机」这种短动作可能被漏掉；" +
-                    "容差越大越容易判成「在看」，小于 10° 时正常坐着看手机都可能判不出来。",
+                text = "抽帧越慢越省电，但「刚拿起手机」这种短动作可能被漏掉；" +
+                    "容差越大越容易判成「在看」。判定本身还有 1.5 秒的去抖，" +
+                    "所以眨个眼、偏一下头都不会让状态来回跳。",
                 style = MaterialTheme.typography.bodySmall,
                 color = FocusTheme.colors.textSecondary,
             )
         }
 
-        // ---------------- 视觉模型 ----------------
+        // ---------------- ③ 上报 ----------------
+        SheetSection(
+            title = "上报",
+            subtitle = "决定「要不要把屏幕内容发出去」。只有判定为「正在注视」的那一刻才会截图，" +
+                "而且每次之间至少隔 ${uiState.config.captureCooldownMillis / 60_000L} 分钟。",
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = if (uiState.config.uploadScreenshots) "截图上传已开启" else "截图上传已关闭",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = FocusTheme.colors.textPrimary,
+                    )
+                    Text(
+                        text = if (uiState.config.uploadScreenshots) {
+                            "屏幕内容会离开这台设备。抖音、微信、相册里的东西都可能被一起发出去 —— " +
+                                "只在你能接受这一点时保持开启。"
+                        } else {
+                            "只在本机记录「在看 / 没在看」，一个字节都不出设备。"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = FocusTheme.colors.textSecondary,
+                    )
+                }
+                Switch(
+                    checked = uiState.config.uploadScreenshots,
+                    onCheckedChange = onToggleUpload,
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = FocusTheme.colors.accent,
+                        checkedTrackColor = FocusTheme.colors.accent.copy(alpha = 0.4f),
+                    ),
+                )
+            }
+
+            if (uiState.config.uploadScreenshots) {
+                if (!uiState.canCaptureScreen) {
+                    Text(
+                        text = "但当前拿不到截图：无障碍服务没开，或者系统低于 Android 11" +
+                            "（无障碍的截屏 API 是 Android 11 才有的）。注视照样会被记录，" +
+                            "只是不会产生描述。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = FocusTheme.colors.textSecondary,
+                    )
+                }
+                if (!uiState.draft.isUsable) {
+                    Text(
+                        text = "而且视觉模型还没配好（下面要填地址与模型名），" +
+                            "现在既不会截图也不会产生描述。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = FocusTheme.colors.textSecondary,
+                    )
+                }
+            }
+        }
+
         SheetSection(
             title = "视觉模型",
-            subtitle = "和对话端点是两份独立配置。DeepSeek 不接受图片，所以这里要另配一家多模态服务。",
+            subtitle = "和对话端点是两份独立配置。DeepSeek 不接受图片，所以这里必须另配一家多模态服务。",
         ) {
             SheetTextField(
                 label = "Base URL",
                 value = uiState.draft.baseUrl,
                 onValueChange = onBaseUrlChange,
                 placeholder = "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                monospace = true,
             )
 
             SheetTextField(
@@ -324,7 +350,38 @@ private fun GazeContent(
                 value = uiState.draft.model,
                 onValueChange = onModelChange,
                 placeholder = "qwen-vl-plus / glm-4v-flash / gpt-4o-mini",
+                monospace = true,
+                trailing = {
+                    TextButton(onClick = onFetchModels, enabled = !uiState.isFetchingModels) {
+                        Text(
+                            text = if (uiState.isFetchingModels) "拉取中…" else "拉取",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = FocusTheme.colors.accent,
+                        )
+                    }
+                },
             )
+
+            // 拉取结果就地可选。命名差异太大（同名模型各家后缀不同），
+            // 让端点自己报出候选是最省事的做法。
+            if (uiState.fetchedModels.isNotEmpty()) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 200.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    uiState.fetchedModels.forEach { model ->
+                        SheetChip(
+                            text = model,
+                            selected = model == uiState.draft.model,
+                            onClick = { onPickModel(model) },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                }
+            }
 
             SheetTextField(
                 label = "看图时问它什么",
@@ -364,6 +421,33 @@ private fun GazeContent(
     }
 }
 
+/**
+ * 一句话说清「它此刻会做什么」。
+ *
+ * 这是整个面板最重要的一行：用户不需要理解抽帧、去抖、冷却，只需要知道
+ * **它会不会把我的屏幕发出去**，以及**为什么现在还不会**。
+ */
+private fun conclusion(state: GazeUiState): String = when {
+    !state.config.enabled ->
+        "未开启。打开后会用前置摄像头判断你是否在看屏幕；画面不出设备，状态栏会亮一个绿点。"
+
+    !state.hasCameraPermission ->
+        "已开启，但缺少摄像头权限，实际上并没有在工作。"
+
+    !state.config.uploadScreenshots ->
+        "只在本地记录「在看 / 没在看」，不截图、不上传。"
+
+    !state.draft.isUsable ->
+        "已开启截图上传，但视觉模型还没配好 —— 截图不会产生任何描述。"
+
+    !state.canCaptureScreen ->
+        "已开启截图上传，但无障碍服务没开（或系统低于 Android 11），拿不到截图。"
+
+    else ->
+        "判定为「正在注视」时会截一张屏幕发给「${state.draft.model}」，" +
+            "每次之间至少隔 ${state.config.captureCooldownMillis / 60_000L} 分钟。"
+}
+
 /** 状态下面那行小字：把累计时长说清楚。 */
 private fun statusDetail(status: VisionStatus): String {
     if (status.state == GazeState.OFF || status.state == GazeState.ERROR) {
@@ -375,7 +459,7 @@ private fun statusDetail(status: VisionStatus): String {
         parts += "本轮已连续注视 ${status.continuousFocusMillis / 60_000L} 分钟"
     }
     if (status.todayFocusMillis > 0L) {
-        parts += "本次运行累计 ${status.todayFocusMillis / 60_000L} 分钟"
+        parts += "今天累计 ${status.todayFocusMillis / 60_000L} 分钟"
     }
     if (parts.isEmpty()) parts += "画面只在设备本地处理，不落盘"
     return parts.joinToString(" · ")

@@ -229,8 +229,109 @@ class ConversationEngine(
     }
 
     /**
-     * 后台补向量。
+     * 主动盘问：由监督层触发，让 AI 先开口。
      *
+     * ===========================================================================
+     * 和 [send] 的区别只有一处：没有「他刚发来的消息」
+     * ===========================================================================
+     * 其余完全相同 —— 同样的稳定段、同样的易变状态块、同样的指令解析与执行。
+     * 唯一多出来的是 [PromptAssembler.buildProactiveTrigger]，它把「为什么现在让你
+     * 开口」写进上下文；以及一条**不落盘**的临时用户消息，用来承载状态块
+     * （理由见 `PromptAssembler.buildTurns`：不能改动历史中段的字节）。
+     *
+     * **调用方已经确认过「他此刻正在注视屏幕」**，这里不再判断这件事 ——
+     * 判断只应该有一个地方，两处判断迟早会不一致。
+     */
+    suspend fun askProactively(reason: String): SendOutcome {
+        var phase = "主动盘问"
+
+        try {
+            phase = "读取端点配置"
+            val config = aiConfig.activeConfigNow()
+            if (!config.isUsable) return SendOutcome.NotConfigured
+
+            // 用触发原因本身去召回记忆：「他刚连着开了三次小红书」这种查询，
+            // 正好能把「他上次说要戒短视频」这类往事捞出来。
+            phase = "召回记忆"
+            val recalled = memory.recall(queryText = reason, queryEmbedding = null)
+
+            phase = "组装提示词"
+            val now = clock()
+            val history = conversation.messages.value
+
+            val systemPrompt = PromptAssembler.buildSystemPrompt(
+                prePrompt = config.prePrompt,
+                personas = personas.personas.value,
+                coreMemories = memory.coreMemories(),
+                shortTermMemories = memory.recentShortTerm(),
+            )
+
+            val volatileContext = buildString {
+                append(
+                    PromptAssembler.buildVolatileContext(
+                        recalledMemories = recalled.memories.map { it.entry },
+                        recalledConversation = recalled.conversationSnippets,
+                        todos = policy.todos.value,
+                        whitelist = policy.whitelist.value,
+                        timeline = timeline.events.value,
+                        vision = gaze.status.value,
+                        history = history,
+                        lastInteractionMillis = history
+                            .lastOrNull { it.sender == MessageSender.USER }
+                            ?.timestampMillis,
+                        nowMillis = now,
+                    ),
+                )
+                appendLine()
+                appendLine()
+                append(PromptAssembler.buildProactiveTrigger(reason))
+            }
+
+            val turns = PromptAssembler.buildTurns(
+                systemPrompt = systemPrompt,
+                history = history,
+                volatileContext = volatileContext,
+                trailingUserText = PromptAssembler.PROACTIVE_TRIGGER_TEXT,
+            )
+
+            phase = "调用模型"
+            val completion = client.chat(config, turns).getOrElse { throwable ->
+                return fail(throwable.message?.takeIf { it.isNotBlank() } ?: "请求模型失败")
+            }
+            completion.cacheStats?.let(cache::record)
+
+            phase = "解析回复"
+            val parsed = AiCommandParser.parse(completion.content)
+            val visible = parsed.visibleText.ifBlank {
+                return SendOutcome.Failed("模型没有输出任何内容")
+            }
+
+            conversation.append(
+                ChatMessage(
+                    id = newId(MessageSender.AI),
+                    sender = MessageSender.AI,
+                    text = visible,
+                    timestampMillis = clock(),
+                ),
+            )
+
+            phase = "执行指令"
+            parsed.commands.forEach { command -> execute(command) }
+
+            phase = "更新记忆索引"
+            memory.syncIndex()
+
+            return SendOutcome.Sent
+        } catch (e: CancellationException) {
+            throw e
+        } catch (t: Throwable) {
+            Log.e(TAG, "主动盘问异常（阶段：$phase）", t)
+            return fail("[$phase] ${describeUnexpected(t)}")
+        }
+    }
+
+    /**
+     * 后台补向量。     *
      * 由 `AppContainer` 定期调用，也可以在一次发送之后顺手调一次。
      * 失败不报错 —— 没有向量模型时它会一直失败，那是正常状态，不是错误。
      */

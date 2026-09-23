@@ -2,7 +2,9 @@ package com.focussupervisor.app.core
 
 import android.content.Context
 import com.focussupervisor.app.core.ai.ConversationEngine
+import com.focussupervisor.app.core.ai.ProactiveSupervisor
 import com.focussupervisor.app.core.network.OpenAiCompatibleClient
+import com.focussupervisor.app.core.notify.ProactiveNotifier
 import com.focussupervisor.app.core.permission.PermissionManager
 import com.focussupervisor.app.data.datastore.AppPreferencesDataSource
 import com.focussupervisor.app.data.repository.AiConfigRepository
@@ -174,7 +176,26 @@ class AppContainer(context: Context) {
         gaze = gaze,
     )
 
+    /**
+     * 主动盘问引擎。
+     *
+     * 它在容器里而不是在某个界面里：盘问的触发源（拦截、注视、待办）与界面是否
+     * 打开毫无关系 —— 用户没开应用的时候才是它最该工作的时候。
+     */
+    val proactiveSupervisor: ProactiveSupervisor = ProactiveSupervisor(
+        policy = policy,
+        gaze = gaze,
+        timeline = timeline,
+        engine = conversationEngine,
+        notifier = ProactiveNotifier(appContext, conversation),
+        scope = appScope,
+    )
+
     init {
+        // 主动盘问引擎：常驻监听拦截、注视、待办三类触发，但**只在判定为用户
+        // 正在注视屏幕时才开口**。理由与全套闸门逻辑见 ProactiveSupervisor 的类注释。
+        proactiveSupervisor.start()
+
         // 首次启动时把内置白名单与默认预置一次性灌进 DataStore。
         // 放在容器初始化里而不是某个仓库里，理由见 AppPreferencesDataSource.seedIfNeeded：
         // 让两个仓库各自判断「我该不该初始化」会产生竞态。

@@ -224,30 +224,57 @@ object PromptAssembler {
         systemPrompt: String,
         history: List<ChatMessage>,
         volatileContext: String,
+        trailingUserText: String? = null,
     ): List<ChatTurn> {
         val turns = windowedHistory(history)
-
-        // 状态挂在本轮用户消息上。找不到用户消息（理论上不会发生：只有用户发消息
-        // 才会走到这里）就退化成不挂 —— 总比把状态拼到 AI 的话后面强。
-        val lastUserIndex = turns.indexOfLast { it.sender == MessageSender.USER }
 
         val result = mutableListOf<ChatTurn>()
         result += ChatTurn.system(systemPrompt)
 
-        turns.forEachIndexed { index, message ->
-            val stamped = stamp(message)
-            val content = if (index == lastUserIndex && volatileContext.isNotBlank()) {
-                "$stamped\n\n$volatileContext"
-            } else {
-                stamped
+        // ---- 常规路径：状态挂在本轮用户消息上 ----
+        if (trailingUserText == null) {
+            val lastUserIndex = turns.indexOfLast { it.sender == MessageSender.USER }
+
+            turns.forEachIndexed { index, message ->
+                val stamped = stamp(message)
+                val content = if (index == lastUserIndex && volatileContext.isNotBlank()) {
+                    "$stamped\n\n$volatileContext"
+                } else {
+                    stamped
+                }
+
+                when (message.sender) {
+                    MessageSender.USER -> result += ChatTurn.user(content)
+                    MessageSender.AI -> result += ChatTurn.assistant(content)
+                    MessageSender.SYSTEM -> Unit
+                }
             }
 
+            return result
+        }
+
+        // ---- 主动盘问路径：状态挂在那条**临时**的触发消息上 ----
+        //
+        // 这条路没有「他刚发的新消息」，所以状态块不能挂到历史里的旧消息上 ——
+        // 那等于改动历史中段的一个字节，后面所有内容都会失去缓存前缀（见类注释）。
+        // 正确做法是在末尾追加一条不落盘的临时 user 消息，把状态与触发说明都挂给它。
+        turns.forEach { message ->
             when (message.sender) {
-                MessageSender.USER -> result += ChatTurn.user(content)
-                MessageSender.AI -> result += ChatTurn.assistant(content)
+                MessageSender.USER -> result += ChatTurn.user(stamp(message))
+                MessageSender.AI -> result += ChatTurn.assistant(stamp(message))
                 MessageSender.SYSTEM -> Unit
             }
         }
+
+        result += ChatTurn.user(
+            buildString {
+                append(trailingUserText)
+                if (volatileContext.isNotBlank()) {
+                    append("\n\n")
+                    append(volatileContext)
+                }
+            },
+        )
 
         return result
     }
@@ -429,6 +456,39 @@ object PromptAssembler {
 
     /** 状态块的抬头。措辞要让模型一眼分清「这是系统给的」而不是「他打的字」。 */
     private const val STATUS_HEADER = "【本轮状态 · 系统提供，每轮更新，不是他打的字】"
+
+    /**
+     * 主动盘问时追加在末尾的那条**临时**用户消息。
+     *
+     * 它不是用户说的话，所以必须写成第三人称说明，并且明确告诉模型「由你先开口」——
+     * 否则模型会以为这是用户发来的内容，回一句「你发的这是什么意思」。
+     *
+     * 这条消息**不落盘**：下一次请求的历史里不会有它，因此不会污染对话记录，
+     * 也不会破坏缓存前缀（它永远在最后一条）。
+     */
+    const val PROACTIVE_TRIGGER_TEXT: String =
+        "（他刚拿起手机看着屏幕，还没说话。这一轮由你先开口 —— 直接对他说话。）"
+
+    /**
+     * 告诉模型「为什么现在让你主动开口」。
+     *
+     * 触发原因的措辞直接决定盘问的质量：给一句「用户刚才在 5 分钟内连续尝试打开
+     * 小红书 3 次」，模型就能问出具体的问题；只给「触发了拦截」，它只能问出
+     * 「你还好吗」这种没有信息量的话。
+     *
+     * @param reason 由 [com.focussupervisor.app.core.ai.ProactiveSupervisor] 组装
+     */
+    fun buildProactiveTrigger(reason: String): String = buildString {
+        appendLine("# 为什么现在让你主动开口")
+        appendLine()
+        appendLine(reason.trim())
+        appendLine()
+        appendLine("要求：")
+        appendLine("1. 直接对他说话，一到两句，不要写小作文；")
+        appendLine("2. 不要复述上面这段说明，也不要说「系统让我问你」；")
+        appendLine("3. 把这件事用你自己的话点出来，然后问一个**具体**的问题 —— ")
+        appendLine("   能让他用一句话回答的那种，而不是「你现在感觉怎么样」。")
+    }
 
     /**
      * 实时状态说明。**纯静态文案**：它必须原样待在缓存前缀里，不能掺任何数据。

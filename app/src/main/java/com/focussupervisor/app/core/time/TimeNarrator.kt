@@ -143,6 +143,22 @@ object TimeNarrator {
      */
     fun dayOffset(millis: Long, nowMillis: Long): Long = daysBetween(millis, nowMillis)
 
+    /**
+     * 日历天的标识（`2026-09-23`，本地时区）。
+     *
+     * ===========================================================================
+     * 跨天为什么必须按「日历天」而不是「24 小时」
+     * ===========================================================================
+     * 昨晚 23:50 和今天 00:10 只差 20 分钟，但它们属于不同的两天 —— 所以
+     * 「今天累计注视了多久」「今天被拦了几次」必须在这 20 分钟里翻页。
+     * 用「距上次归零满 24 小时」来判，跨零点的使用会全部算进前一天，
+     * 而那恰好是使用最密集的时段，错得最难被发现。
+     *
+     * 所有需要「每天重置一次」的地方（今日注视时长、待问队列）都存一个 dayKey，
+     * 每次比对它有没有变。判据收在这一个函数里，就不会出现两处各写一套。
+     */
+    fun dayKey(millis: Long): String = zoned(millis).toLocalDate().toString()
+
     fun summarizeDay(events: List<TimelineEvent>, nowMillis: Long): String {
         val today = zoned(nowMillis).toLocalDate()
         val todays = events.filter { zoned(it.atMillis).toLocalDate() == today }
