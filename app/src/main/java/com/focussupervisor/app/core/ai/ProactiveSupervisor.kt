@@ -338,7 +338,7 @@ class ProactiveSupervisor(
         )
 
         when (engine.askProactively(question.reason)) {
-            is SendOutcome.Sent -> notifier.onProactiveMessage(question.reason)
+            is SendOutcome.Sent -> notifier.onProactiveMessage()
             SendOutcome.NotConfigured -> Unit   // 没配端点，静默：界面里已经到处在提示了
             is SendOutcome.Failed -> Unit       // 失败已经由引擎写成系统胶囊了
         }
