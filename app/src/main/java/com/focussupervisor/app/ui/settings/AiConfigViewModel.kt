@@ -5,6 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.focussupervisor.app.appContainer
 import com.focussupervisor.app.core.network.AiClientException
+import com.focussupervisor.app.core.network.PromptCacheStats
 import com.focussupervisor.app.domain.model.AiConfig
 import com.focussupervisor.app.domain.model.AiPreset
 import com.focussupervisor.app.domain.model.AiPresetDefaults
@@ -47,6 +48,11 @@ data class AiConfigUiState(
     val message: String? = null,
     val isMessageError: Boolean = true,
     val isDirty: Boolean = false,
+    /**
+     * 最近一次请求的上下文缓存命中情况。[com.focussupervisor.app.core.network.PromptCacheStats]
+     * 为 null 表示**端点没上报**，不是「没命中」。
+     */
+    val cacheStats: PromptCacheStats? = null,
 ) {
     val selectedPreset: AiPreset? get() = presets.firstOrNull { it.id == selectedPresetId }
 
@@ -92,6 +98,21 @@ class AiConfigViewModel(application: Application) : AndroidViewModel(application
 
     init {
         observeRepository()
+        observePromptCache()
+    }
+
+    /**
+     * 观测最近一次请求的缓存命中情况。
+     *
+     * 放在这个面板里，是因为它衡量的是**提示词排布**的代价，而人设与前置提示正是
+     * 在这个面板里配置的 —— 「我改了这几个字，命中率掉没掉」应该能在同一个界面里看到。
+     */
+    private fun observePromptCache() {
+        viewModelScope.launch {
+            container.promptCache.last.collect { stats ->
+                _uiState.update { it.copy(cacheStats = stats) }
+            }
+        }
     }
 
     private fun observeRepository() {

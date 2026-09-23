@@ -18,7 +18,42 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
 /**
- * 把「人设 + 前置提示 + 记忆 + 待办 + 白名单现状 + 近况 + 时间 + 指令协议」拼成一段系统提示词。
+ * 提示词组装。
+ *
+ * ===========================================================================
+ * 最重要的约束：前缀必须逐字节稳定
+ * ===========================================================================
+ * DeepSeek 的上下文硬盘缓存（Context Caching on Disk）按**前缀**命中：一次请求的
+ * token 序列只要和上一次有公共前缀，那部分就按缓存价计费。而**前缀里只要有一个字符
+ * 不同，从那里往后全部失效**。
+ *
+ * 所以这个文件的设计目标不只是「提示词写得好读」，而是「**让最长公共前缀尽可能长**」。
+ * 消息数组被刻意排成三段：
+ *
+ * ```
+ *   [system]  稳定段：前置提示、人设、核心/短期记忆、指令协议、各种规则
+ *             —— 只在用户改人设、改前置提示、或记忆发生变化时才变
+ *   [历史]    每一轮都是上一次请求里原样出现过的内容，窗口按块滑动（见 HISTORY_TRIM_CHUNK）
+ *   [末尾]    本轮状态：召回的记忆、相关往事、待办、白名单剩余时间、最近发生的事、现在几点
+ *             —— 每轮都变，所以必须放在最后，而且**只能**放在最后
+ * ```
+ *
+ * 上一版把这三段全塞进 system 里。后果是每轮的 system 都不一样，公共前缀在第一段就
+ * 断掉，**缓存命中率恒为 0** —— 等于每一轮都在为整段历史付全价。现在把「会变的」
+ * 全部挪到最后一段。
+ *
+ * ===========================================================================
+ * 为什么状态块不干脆做成独立的一条消息
+ * ===========================================================================
+ * 把状态块做成历史之后独立的 `user` 消息，理论上能让公共前缀再长一条消息（那条消息
+ * **前面**的所有内容都没变）。但代价是出现「两条连续的 user 消息」—— OpenAI 官方
+ * 接口接受，Anthropic 不接受，而各种中转站的实现参差不齐（有的会合并同角色，
+ * 有的直接 400）。
+ *
+ * 这个应用的第一原则是「在任何 OpenAI 兼容端点上都能用」，而多命中的那一条消息也就
+ * 几十个 token。所以状态块**拼在本轮用户消息的末尾**：他的话在前，状态在后，
+ * 中间有明确分隔。代价是下一轮这条消息会以「不带状态块」的形式进入历史，公共前缀
+ * 到它为止 —— 但用户消息本来就不长，真正的长前缀（system + 全部历史）一分不少地命中了。
  *
  * ===========================================================================
  * 顺序就是优先级
@@ -28,57 +63,51 @@ import java.time.format.DateTimeFormatter
  *   2. 身份              ← AI 人设
  *   3. 对话对象          ← 用户人设
  *   4. 核心记忆          ← 不可动摇的设定
- *   5. 长久记忆          ← 沉淀下来的事实
- *   6. 短期记忆          ← 最近发生的事
- *   7. 相关往事          ← 向量召回出来的对话原文
- *   8. 当前待办
- *   9. 白名单现状
- *  10. 可用指令协议
- *  11. 最近发生的事情    ← 带时间的系统事件（拦截、放行、待办、改写消息…）
- *  12. 现在              ← 绝对时间、距上次对话、今天说了多少、今天发生了什么
- *  13. 时间感            ← 上面这些时间该怎么用
+ *   5. 短期记忆          ← 他最近的近况
+ *   6. 可用指令协议
+ *   7. 实时状态说明      ← 告诉他每轮末尾会收到什么
+ *   8. 时间感            ← 怎么用时间，纯规则、不含数据
  * ```
- *
- * 对话本身也带时间：每一轮消息前面都会加上它发生的时间（见 [buildTurns]）。
- * 没有这一层，整段历史在模型眼里就是「刚刚连续发生的」。
- * 这不是随意排的：**越靠前的内容，模型越会当成不可协商的前提**。所以用户的
- * 前置提示必须在第 1 位（哪怕它和人设冲突，也该按用户写的来），而指令协议这种
- * 「工具说明」放最后，因为它需要被读到，但不需要被当成身份认同。
- *
- * ===========================================================================
- * 为什么拼成一段大 system 而不是拆成多条
- * ===========================================================================
- * 不少端点对 `system` 消息的位置与条数有各自的脾气（有的只认第一条，有的会把
- * 中间插的 system 按 user 处理）。拼成**一条** system 是最兼容的做法 ——
- * 这也正是「中转站」场景下最需要的性质。
+ * **越靠前的内容，模型越会当成不可协商的前提**。所以用户的前置提示必须在第 1 位
+ * （哪怕它和人设冲突，也该按用户写的来），而指令协议这种「工具说明」放后面。
  */
 object PromptAssembler {
 
-    /** 带进上下文的最近对话条数。 */
+    /**
+     * 带进上下文的最近对话条数（下限）。
+     *
+     * 实际保留条数在 [RECENT_TURN_LIMIT] 到 [RECENT_TURN_LIMIT] + [HISTORY_TRIM_CHUNK] - 1
+     * 之间浮动，理由见 [HISTORY_TRIM_CHUNK]。
+     */
     const val RECENT_TURN_LIMIT = 24
+
+    /**
+     * 历史窗口的**滑动步长**。
+     *
+     * 这是为缓存命中率服务的一个刻意设计。如果严格「只留最近 24 条」，那么每来一条
+     * 新消息，窗口的第一条就会变，公共前缀立刻断在历史的开头 —— 缓存只覆盖到那条
+     * system，等于白设。
+     *
+     * 改成按 12 条为一块滑动之后，窗口的第一条**每 12 轮才变一次**：这期间新消息只是
+     * 往末尾追加，前面逐字节不变，整段历史都在命中范围内。代价是最多多带 11 条消息
+     * （一两百 token），换来 12 轮里稳定的长前缀 —— 这个交换在任何价格模型下都划算。
+     */
+    const val HISTORY_TRIM_CHUNK = 12
 
     private val TIME_FORMATTER: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
 
     /**
-     * 构造 system 提示词。
+     * 构造**稳定段** system 提示词。
      *
-     * @param prePrompt 用户的**前置提示**，逐字放在最前面。空串则整段省略。
-     * @param recalledMemories 向量/关键词召回出的记忆（不含核心与短期，那两层单独传）
-     * @param recalledConversation 召回出的对话原文片段
+     * 这个方法里**不许出现任何随时间变化的输入**（当前时间、剩余分钟数、召回结果…）。
+     * 加参数之前先问一句：这个值在两次相邻请求之间会不会变？会变就别加进来。
+     * 这是缓存命中率的全部秘密，也是这个文件最容易被后人无意破坏的地方。
      */
     fun buildSystemPrompt(
         prePrompt: String,
         personas: PersonaPair,
         coreMemories: List<MemoryEntry>,
-        recalledMemories: List<MemoryEntry>,
         shortTermMemories: List<MemoryEntry>,
-        recalledConversation: List<String>,
-        todos: List<TodoItem>,
-        whitelist: List<WhitelistApp>,
-        timeline: List<TimelineEvent>,
-        history: List<ChatMessage>,
-        lastInteractionMillis: Long?,
-        nowMillis: Long,
     ): String = buildString {
         // ---- 1. 前置提示（位置最靠前，逐字原样，不做任何加工）----
         if (prePrompt.isNotBlank()) {
@@ -96,20 +125,61 @@ object PromptAssembler {
         appendLine(describeUser(personas.user))
         appendLine()
 
-        // ---- 4~6. 记忆三层 ----
+        // ---- 4 ~ 5. 他这个人 ----
+        //
+        // 召回出来的记忆**不在这里**：那部分每轮都不同，放进来就等于每轮都让缓存失效。
+        // 它们由 buildVolatileContext 放到末尾。
         appendMemorySection("核心记忆", coreMemories, "（暂无）")
-        appendMemorySection("长久记忆", recalledMemories, "（暂无）")
         appendMemorySection("短期记忆", shortTermMemories, "（暂无）")
 
-        // ---- 7. 相关往事 ----
+        // ---- 6. 指令协议 ----
+        appendLine(COMMAND_PROTOCOL)
+
+        // ---- 7. 实时状态说明 ----
+        appendLine(CONTEXT_PROTOCOL)
+
+        // ---- 8. 时间的使用方式 ----
+        appendLine(TIME_PROTOCOL)
+    }
+
+    /**
+     * 构造**本轮状态**块：每轮都会变的东西全部在这里。
+     *
+     * 调用方要把它拼到本轮用户消息的末尾（见 [buildTurns]）。
+     * 返回的串不带尾部空行，方便直接拼接。
+     */
+    fun buildVolatileContext(
+        recalledMemories: List<MemoryEntry>,
+        recalledConversation: List<String>,
+        todos: List<TodoItem>,
+        whitelist: List<WhitelistApp>,
+        timeline: List<TimelineEvent>,
+        history: List<ChatMessage>,
+        lastInteractionMillis: Long?,
+        nowMillis: Long,
+    ): String = buildString {
+        appendLine(STATUS_HEADER)
+
+        // ---- 此刻想起的事 ----
+        if (recalledMemories.isNotEmpty()) {
+            appendLine("# 此刻想起的事")
+            appendLine("这是他以前说过、和当前话题有关的（按相关度排序）：")
+            recalledMemories.forEach { entry ->
+                val pin = if (entry.pinned) "（已置顶）" else ""
+                appendLine("- [${entry.tier.label}] ${entry.content}$pin")
+            }
+            appendLine()
+        }
+
+        // ---- 相关往事 ----
         if (recalledConversation.isNotEmpty()) {
             appendLine("# 相关往事")
-            appendLine("以下是记忆中检索到的、与当前话题可能相关的过往对话原文：")
+            appendLine("从历史对话里检索到的原文片段：")
             recalledConversation.forEach { appendLine("- $it") }
             appendLine()
         }
 
-        // ---- 8. 待办 ----
+        // ---- 待办 ----
         appendLine("# 当前待办")
         if (todos.isEmpty()) {
             appendLine("（暂无待办。如果他提到要做某件事，你可以用指令帮他记下来。）")
@@ -118,7 +188,7 @@ object PromptAssembler {
         }
         appendLine()
 
-        // ---- 9. 白名单现状 ----
+        // ---- 白名单现状 ----
         appendLine("# 应用白名单现状")
         appendLine("不在下列范围内的应用会被系统拦截。")
         if (whitelist.isEmpty()) {
@@ -128,17 +198,98 @@ object PromptAssembler {
         }
         appendLine()
 
-        // ---- 10. 指令协议 ----
-        appendLine(COMMAND_PROTOCOL)
-
-        // ---- 11. 最近发生了什么（带时间的证据）----
+        // ---- 最近发生的事 ----
         appendSituationSection(timeline, nowMillis)
 
-        // ---- 12. 现在 ----
+        // ---- 现在 ----
         appendTimeSection(history, timeline, lastInteractionMillis, nowMillis)
+    }.trim()
 
-        // ---- 13. 怎么用这些时间 ----
-        appendLine(TIME_PROTOCOL)
+    /**
+     * 把最近的对话映射成模型能吃的消息序列，并把 [volatileContext] 拼到本轮用户消息末尾。
+     *
+     * 系统胶囊（[MessageSender.SYSTEM]）会被过滤掉：那些是界面上给**人**看的
+     * 状态播报（「已执行压制」），把它们塞进上下文只会让模型以为自己在跟系统对话。
+     * 它们的内容并不丢 —— 该记的早就记进时间线了，而时间线在 [volatileContext] 里。
+     *
+     * @param history 按时间正序的完整会话
+     */
+    fun buildTurns(
+        systemPrompt: String,
+        history: List<ChatMessage>,
+        volatileContext: String,
+    ): List<ChatTurn> {
+        val turns = windowedHistory(history)
+
+        // 状态挂在本轮用户消息上。找不到用户消息（理论上不会发生：只有用户发消息
+        // 才会走到这里）就退化成不挂 —— 总比把状态拼到 AI 的话后面强。
+        val lastUserIndex = turns.indexOfLast { it.sender == MessageSender.USER }
+
+        val result = mutableListOf<ChatTurn>()
+        result += ChatTurn.system(systemPrompt)
+
+        turns.forEachIndexed { index, message ->
+            val stamped = stamp(message)
+            val content = if (index == lastUserIndex && volatileContext.isNotBlank()) {
+                "$stamped\n\n$volatileContext"
+            } else {
+                stamped
+            }
+
+            when (message.sender) {
+                MessageSender.USER -> result += ChatTurn.user(content)
+                MessageSender.AI -> result += ChatTurn.assistant(content)
+                MessageSender.SYSTEM -> Unit
+            }
+        }
+
+        return result
+    }
+
+    /**
+     * 每条消息前面带上它**发生的时间**。
+     *
+     * 没有时间戳，整段历史在模型眼里就是「刚刚连续发生的」，它会把三天前的一句抱怨
+     * 当成当下的情绪。时间戳写进消息后就固定了，所以它不会破坏缓存前缀。
+     */
+    private fun stamp(message: ChatMessage): String =
+        "[${TimeNarrator.stamp(message.timestampMillis)}] ${message.text}"
+
+    /**
+     * 按块滑动的历史窗口，见 [HISTORY_TRIM_CHUNK]。
+     *
+     * 返回条数在 `[RECENT_TURN_LIMIT, RECENT_TURN_LIMIT + HISTORY_TRIM_CHUNK)` 之间。
+     */
+    private fun windowedHistory(history: List<ChatMessage>): List<ChatMessage> {
+        val turns = history.filter { it.sender != MessageSender.SYSTEM }
+
+        val excess = turns.size - RECENT_TURN_LIMIT
+        if (excess <= 0) return turns
+
+        // 把「超出的条数」向下取整到块边界再丢：窗口起点于是在 12 轮之内保持不变。
+        val drop = (excess / HISTORY_TRIM_CHUNK) * HISTORY_TRIM_CHUNK
+        return if (drop <= 0) turns else turns.drop(drop)
+    }
+
+    // -----------------------------------------------------------------------
+    // 分段渲染
+    // -----------------------------------------------------------------------
+
+    private fun StringBuilder.appendMemorySection(
+        title: String,
+        entries: List<MemoryEntry>,
+        emptyHint: String,
+    ) {
+        appendLine("# $title")
+        if (entries.isEmpty()) {
+            appendLine(emptyHint)
+        } else {
+            entries.forEach { entry ->
+                val pin = if (entry.pinned) "（已置顶）" else ""
+                appendLine("- ${entry.content}$pin")
+            }
+        }
+        appendLine()
     }
 
     /**
@@ -197,65 +348,6 @@ object PromptAssembler {
         appendLine()
     }
 
-    /**
-     * 把最近的对话映射成模型能吃的消息序列。
-     *
-     * 系统胶囊（[MessageSender.SYSTEM]）会被过滤掉：那些是界面上给**人**看的
-     * 状态播报（「已执行压制」），把它们塞进上下文只会让模型以为自己在跟系统对话。
-     *
-     * @param history 按时间正序的完整会话
-     * @param aiName 用于把历史里的 AI 发言标注清楚
-     */
-    fun buildTurns(
-        systemPrompt: String,
-        history: List<ChatMessage>,
-    ): List<ChatTurn> {
-        val turns = mutableListOf<ChatTurn>()
-        turns += ChatTurn.system(systemPrompt)
-
-        history.asSequence()
-            .filter { it.sender != MessageSender.SYSTEM }
-            .toList()
-            .takeLast(RECENT_TURN_LIMIT)
-            .forEach { message ->
-                // 每条消息前面带上它**发生的时间**。
-                //
-                // 这是时间感知里最关键的一步：没有时间戳，整段历史在模型眼里就是
-                // 「刚刚连续发生的」，于是它会把三天前的一句抱怨当成当下的情绪。
-                // 有了时间戳，它才知道「这句话是昨晚说的」「这条是三小时前发的」。
-                val stamped = "[${TimeNarrator.stamp(message.timestampMillis)}] ${message.text}"
-
-                turns += when (message.sender) {
-                    MessageSender.USER -> ChatTurn.user(stamped)
-                    MessageSender.AI -> ChatTurn.assistant(stamped)
-                    MessageSender.SYSTEM -> return@forEach
-                }
-            }
-
-        return turns
-    }
-
-    // -----------------------------------------------------------------------
-    // 分段渲染
-    // -----------------------------------------------------------------------
-
-    private fun StringBuilder.appendMemorySection(
-        title: String,
-        entries: List<MemoryEntry>,
-        emptyHint: String,
-    ) {
-        appendLine("# $title")
-        if (entries.isEmpty()) {
-            appendLine(emptyHint)
-        } else {
-            entries.forEach { entry ->
-                val pin = if (entry.pinned) "（已置顶）" else ""
-                appendLine("- ${entry.content}$pin")
-            }
-        }
-        appendLine()
-    }
-
     private fun describeAi(persona: AiPersona): String = buildString {
         append("你的名字是「${persona.name}」。")
         if (persona.gender != com.focussupervisor.app.domain.model.PersonaGender.UNSPECIFIED) {
@@ -296,12 +388,33 @@ object PromptAssembler {
 
     private const val SEPARATOR = "────────────────"
 
+    /** 状态块的抬头。措辞要让模型一眼分清「这是系统给的」而不是「他打的字」。 */
+    private const val STATUS_HEADER = "【本轮状态 · 系统提供，每轮更新，不是他打的字】"
+
+    /**
+     * 实时状态说明。**纯静态文案**：它必须原样待在缓存前缀里，不能掺任何数据。
+     */
+    private val CONTEXT_PROTOCOL = """
+        # 每轮末尾的状态块
+
+        他的每条新消息下面会附一段以「【本轮状态 · 系统提供，每轮更新，不是他打的字】」
+        开头的区块。那是**系统**给你的实时信息：他刚做了什么、有哪些待办、现在几点、
+        有哪些以前说过的事和当前话题有关。
+
+        用法：
+        1. 它是事实来源，可以直接引用（「你今天已经被拦了七次」）。
+        2. 它不是他的请求，也不要复述这个区块本身，更不要说「我看到状态块里写着…」。
+        3. 状态块里没有的事，就是你不知道的事。
+    """.trimIndent()
+
     /**
      * 时间的使用方式。
      *
-     * 「把时间放进上下文」只完成了一半 —— 模型看到「距上一次对话 6 小时」未必会
-     * 想到该追问，看到「02:30（深夜）」未必会想到该劝睡。所以除了给数据，还要给
-     * **判断规则**，而且要具体到可执行（「劝他睡」而不是「注意作息」）。
+     * 「把时间放进上下文」只完成了一半 —— 模型看到「距上一次对话 6 小时」未必会想到
+     * 该追问，看到「02:30（深夜）」未必会想到该劝睡。所以除了给数据，还要给**判断规则**，
+     * 而且要具体到可执行（「劝他睡」而不是「注意作息」）。
+     *
+     * 同样必须是纯静态文案：它属于缓存前缀。
      */
     private val TIME_PROTOCOL = """
         # 时间感

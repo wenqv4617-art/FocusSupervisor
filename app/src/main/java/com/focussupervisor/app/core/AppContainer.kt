@@ -16,8 +16,10 @@ import com.focussupervisor.app.data.repository.DataStoreConversationRepository
 import com.focussupervisor.app.data.repository.DataStoreMemoryRepository
 import com.focussupervisor.app.data.repository.DataStorePersonaRepository
 import com.focussupervisor.app.data.repository.DataStoreTimelineRepository
+import com.focussupervisor.app.data.repository.InMemoryPromptCacheRepository
 import com.focussupervisor.app.data.repository.MemoryRepository
 import com.focussupervisor.app.data.repository.PersonaRepository
+import com.focussupervisor.app.data.repository.PromptCacheRepository
 import com.focussupervisor.app.data.repository.TimelineRepository
 import com.focussupervisor.app.data.repository.buildBuiltInWhitelist
 import com.focussupervisor.app.data.mock.MockChatData
@@ -117,6 +119,14 @@ class AppContainer(context: Context) {
 
     /** 权限状态检查与系统设置跳转。 */
     val permissions: PermissionManager = PermissionManager(appContext)
+
+    /**
+     * 最近一次请求的上下文缓存命中情况。
+     *
+     * 纯内存：它是「刚才那一次怎么样」，重启后没有意义。放在容器里是为了让引擎写、
+     * 让「AI 配置」面板读。
+     */
+    val promptCache: PromptCacheRepository = InMemoryPromptCacheRepository()
 
     /**
      * 全屏遮罩控制器。

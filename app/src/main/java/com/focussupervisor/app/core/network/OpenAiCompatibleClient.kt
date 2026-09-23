@@ -162,7 +162,7 @@ class OpenAiCompatibleClient(
         config: AiConfig,
         turns: List<ChatTurn>,
         maxTokens: Int? = null,
-    ): Result<String> {
+    ): Result<ChatCompletion> {
         val roots = candidateRoots(config.baseUrl)
         if (roots.isEmpty()) {
             return Result.failure(AiClientException("Base URL 为空，请先在「AI 配置」里填写端点地址"))
@@ -196,7 +196,13 @@ class OpenAiCompatibleClient(
             client.newCall(request).executeOrCancel().use { response ->
                 val body = response.body?.string().orEmpty()
                 if (response.isSuccessful) {
-                    Result.success(parseAssistantContent(body))
+                    // usage 顺手解析出来，交给上层显示缓存命中率。
+                    Result.success(
+                        ChatCompletion(
+                            content = parseAssistantContent(body),
+                            cacheStats = parseCacheStats(body),
+                        ),
+                    )
                 } else {
                     Result.failure(httpFailure(response.code, body))
                 }
@@ -375,6 +381,36 @@ class OpenAiCompatibleClient(
      *
      * 取不到就返回空串而不是报错：「握手成功但模型没说话」和「连不上」是两回事。
      */
+    /**
+     * 解析 usage 里的缓存命中字段。
+     *
+     * 两种上报方式都要认，因为这个应用的定位就是「用户会把它指向各种中转站」：
+     *  - DeepSeek 官方：`usage.prompt_cache_hit_tokens` / `prompt_cache_miss_tokens`
+     *  - OpenAI 官方：`usage.prompt_tokens_details.cached_tokens`
+     *
+     * 认不出就返回 null，界面上那一行整段不显示 —— 不猜、不显示 0，
+     * 因为「端点没上报」和「一次都没命中」是两件完全不同的事。
+     */
+    private fun parseCacheStats(body: String): PromptCacheStats? {
+        if (body.isBlank()) return null
+        return runCatching {
+            val usage = JSONObject(body).optJSONObject("usage") ?: return@runCatching null
+            val promptTokens = usage.optLong("prompt_tokens", 0L)
+            if (promptTokens <= 0L) return@runCatching null
+
+            val deepSeekHit = usage.optLong("prompt_cache_hit_tokens", -1L).takeIf { it >= 0L }
+            val openAiHit = usage.optJSONObject("prompt_tokens_details")
+                ?.optLong("cached_tokens", 0L)
+            val cached = (deepSeekHit ?: openAiHit ?: 0L).coerceIn(0L, promptTokens)
+
+            PromptCacheStats(
+                promptTokens = promptTokens,
+                cachedTokens = cached,
+                completionTokens = usage.optLong("completion_tokens", 0L),
+            )
+        }.getOrNull()
+    }
+
     private fun parseAssistantContent(body: String): String {
         if (body.isBlank()) return ""
         return runCatching {
@@ -550,6 +586,45 @@ data class ChatTurn(
         fun user(content: String) = ChatTurn("user", content)
         fun assistant(content: String) = ChatTurn("assistant", content)
     }
+}
+
+/**
+ * 一次对话请求的结果：正文 + 这次请求的**缓存命中情况**。
+ *
+ * 为什么要专门把 usage 带出来：DeepSeek 的上下文硬盘缓存是按前缀命中的，而
+ * 「命中没命中」只能从响应里读。不给用户看这个数，就没有任何办法验证提示词的
+ * 排布到底有没有生效 —— 而这正是最容易在后续改动里被无声破坏的东西
+ * （往 system 里加一个随时间变化的字段，命中率立刻归零，界面上却毫无变化）。
+ *
+ * @param content 模型回复的正文
+ * @param cacheStats 端点上报了 usage 才有；不认识这个字段的端点返回 null
+ */
+data class ChatCompletion(
+    val content: String,
+    val cacheStats: PromptCacheStats?,
+)
+
+/**
+ * 一次请求的前缀缓存命中情况。
+ *
+ * 字段名按 DeepSeek 的语义命名，但取值同时兼容两种上报方式：
+ *  - DeepSeek：`usage.prompt_cache_hit_tokens`
+ *  - OpenAI：`usage.prompt_tokens_details.cached_tokens`
+ *
+ * @param promptTokens 本次请求的输入 token 总数
+ * @param cachedTokens 其中**命中缓存**的部分（按缓存价计费）
+ */
+data class PromptCacheStats(
+    val promptTokens: Long,
+    val cachedTokens: Long,
+    val completionTokens: Long = 0L,
+) {
+    /** 未命中的输入 token 数（按原价计费）。 */
+    val missTokens: Long get() = (promptTokens - cachedTokens).coerceAtLeast(0L)
+
+    /** 命中率，0f~1f。用于界面上那句结论。 */
+    val hitRatio: Float
+        get() = if (promptTokens <= 0L) 0f else cachedTokens.toFloat() / promptTokens.toFloat()
 }
 
 /**

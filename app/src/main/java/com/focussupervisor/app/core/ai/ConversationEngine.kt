@@ -7,6 +7,7 @@ import com.focussupervisor.app.data.repository.AppPolicyRepository
 import com.focussupervisor.app.data.repository.ConversationRepository
 import com.focussupervisor.app.data.repository.MemoryRepository
 import com.focussupervisor.app.data.repository.PersonaRepository
+import com.focussupervisor.app.data.repository.PromptCacheRepository
 import com.focussupervisor.app.data.repository.TextEmbedder
 import com.focussupervisor.app.data.repository.TimelineRepository
 import com.focussupervisor.app.domain.model.AiCommand
@@ -73,6 +74,7 @@ class ConversationEngine(
     private val personas: PersonaRepository,
     private val aiConfig: AiConfigRepository,
     private val timeline: TimelineRepository,
+    private val cache: PromptCacheRepository,
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
 
@@ -141,35 +143,50 @@ class ConversationEngine(
             val recalled = memory.recall(queryText = text, queryEmbedding = queryEmbedding)
 
             // ---- 4. 组装提示词 ----
+            //
+            // 稳定段（进 system）与本轮状态（拼到本轮用户消息末尾）**必须分开**，
+            // 混在一起就等于每轮都让上下文缓存失效。理由见 PromptAssembler 的类注释。
             phase = "组装提示词"
             val now = clock()
+            val history = conversation.messages.value
+
             val systemPrompt = PromptAssembler.buildSystemPrompt(
                 prePrompt = config.prePrompt,
                 personas = personas.personas.value,
                 coreMemories = memory.coreMemories(),
-                recalledMemories = recalled.memories.map { it.entry },
                 shortTermMemories = memory.recentShortTerm(),
+            )
+
+            val volatileContext = PromptAssembler.buildVolatileContext(
+                recalledMemories = recalled.memories.map { it.entry },
                 recalledConversation = recalled.conversationSnippets,
                 todos = policy.todos.value,
                 whitelist = policy.whitelist.value,
                 timeline = timeline.events.value,
-                history = conversation.messages.value,
+                history = history,
                 lastInteractionMillis = previousUserMessageMillis,
                 nowMillis = now,
             )
 
             val turns = PromptAssembler.buildTurns(
                 systemPrompt = systemPrompt,
-                history = conversation.messages.value,
+                history = history,
+                volatileContext = volatileContext,
             )
 
             // ---- 5. 调模型 ----
             phase = "调用模型"
-            val reply = client.chat(config, turns).getOrElse { throwable ->
+            val completion = client.chat(config, turns).getOrElse { throwable ->
                 return fail(
                     throwable.message?.takeIf { it.isNotBlank() } ?: "请求模型失败",
                 )
             }
+
+            // usage 里有缓存命中数就记下来，给「AI 配置」面板显示。
+            // 端点没上报时 cacheStats 为 null —— 那是「看不到」，不是「没命中」，
+            // 两者必须区分，否则会去优化一个本来就正常的东西。
+            completion.cacheStats?.let(cache::record)
+            val reply = completion.content
 
             // ---- 6. 解析指令 ----
             phase = "解析回复"

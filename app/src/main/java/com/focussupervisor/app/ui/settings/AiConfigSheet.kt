@@ -34,6 +34,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.focussupervisor.app.core.network.PromptCacheStats
 import com.focussupervisor.app.domain.model.AiConfig
 import com.focussupervisor.app.ui.theme.FocusTheme
 import kotlin.math.roundToInt
@@ -230,6 +231,8 @@ private fun AiConfigContent(
             minHeight = 110,
             footer = "留空则不注入。位置在所有内容之前，因此它压过人设与全部系统规则。",
         )
+
+        CacheStatsRow(stats = uiState.cacheStats)
 
         SheetMessageLine(message = uiState.message, isError = uiState.isMessageError)
 
@@ -440,6 +443,61 @@ private fun TemperatureRow(
             color = FocusTheme.colors.textSecondary,
         )
     }
+}
+
+/**
+ * 上下文缓存命中情况。
+ *
+ * ===========================================================================
+ * 为什么要把它摆在配置页里
+ * ===========================================================================
+ * DeepSeek 的上下文硬盘缓存按**前缀**命中，命中部分的输入价约为未命中的 1/30~1/50。
+ * 而命中率完全取决于提示词里内容的摆放顺序 —— 这是个极其脆弱的性质：只要往 system
+ * 里加一个「当前时间」，命中率会立刻掉到 0，**而界面上不会有任何别的变化**。
+ *
+ * 所以把最近一次的数字摆在这里。有这么一个东西盯着，以后任何人改提示词都能立刻
+ * 看出代价，而不是等到月底看账单。
+ *
+ * `stats == null` 表示**端点没有上报 usage**（很多中转站不透传），不是「一次都没
+ * 命中」—— 这两件事必须分开说，否则用户会去优化一个本来就正常的东西。
+ */
+@Composable
+private fun CacheStatsRow(stats: PromptCacheStats?) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        SheetSectionLabel(text = "上下文缓存")
+
+        Text(
+            text = when {
+                stats == null -> "还没有记录。发一条消息之后，这里会显示最近一次的命中情况。"
+                else -> "最近一次：命中 ${stats.cachedTokens} / 输入 ${stats.promptTokens} tokens" +
+                    "（${(stats.hitRatio * 100).roundToInt()}%）"
+            },
+            style = MaterialTheme.typography.bodyMedium,
+            color = FocusTheme.colors.textPrimary,
+        )
+
+        Text(
+            text = cacheConclusion(stats),
+            style = MaterialTheme.typography.bodySmall,
+            color = FocusTheme.colors.textSecondary,
+        )
+    }
+}
+
+private fun cacheConclusion(stats: PromptCacheStats?): String = when {
+    stats == null ->
+        "有些服务商不会返回缓存用量。看不到数字不等于没命中。"
+    stats.promptTokens <= 0L ->
+        "这次请求没有输入 token，无法判断。"
+    stats.cachedTokens <= 0L ->
+        "这次没命中任何前缀。刚换话题时前一两轮本来就不命中（缓存要从重复里才建得起来），" +
+            "但如果是连续的每轮都不命中，那说明前缀里有每轮都变的内容。"
+    stats.hitRatio < 0.3f ->
+        "命中偏低。前缀还太短，或者前缀里混进了每轮都变的东西。"
+    stats.hitRatio < 0.7f ->
+        "命中正常。重复的部分按缓存价计费了。"
+    else ->
+        "命中很高，重复内容几乎都走了缓存价。"
 }
 
 /** 0.0 ~ 1.5、步进 0.1 对应的中间刻度数。 */
