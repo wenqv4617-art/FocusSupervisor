@@ -35,26 +35,58 @@ import java.time.format.DateTimeFormatter
  */
 object AiCommandParser {
 
+    /** 指令块的两端标记。 */
+    private const val COMMAND_OPEN = "[[cmd:"
+    private const val COMMAND_CLOSE = "]]"
+
     /**
-     * 指令块的正则。
+     * =======================================================================
+     * 为什么这里一个正则都没有
+     * =======================================================================
+     * 这里原本是 `Regex("""\[\[cmd:(\{.*?})]]""")`。它在 JVM 上完全正常，
+     * 在 Android 上却把整个类炸掉了：
      *
-     * `.` 默认不匹配换行 —— 这正是我们要的：单行协议，多行的不认。
-     * 非贪婪的 `.*?}` 对「值里不含 `}`」的平坦 JSON 足够；含嵌套对象或字符串里带
-     * 花括号的会被截断，进而解析失败并产出 Unparsable，不会静默错误执行。
+     *     ExceptionInInitializerError ← PatternSyntaxException:
+     *     Syntax error in regexp pattern near index 15
+     *
+     * 原因是 Android 的 java.util.regex 底层是 ICU，而 ICU 和 JVM 在这一点上不同：
+     * **一个没有量词与之配对的 `}` 是语法错误**，JVM 却把它当普通字符。
+     * 上面那条模式里 `{` 已经正确转义成字面量了，于是后面那个裸 `}` 就没有量词可闭合。
+     *
+     * 这不是推测，是拿 ICU 74 直接调 `uregex_open` 复现出来的，偏移量和手机上分毫不差：
+     *
+     *     \[\[cmd:(\{.*?})]]    → 语法错误 0x10301，解析偏移 15   ← 手机上就是这个
+     *     \[\[cmd:({.*?})]]     → 语法错误 0x10301，解析偏移 10
+     *     \[\[cmd:(\{.*?\})]]   → 通过
+     *
+     * 真正致命的是它写在 object 的属性初始化里：异常发生在**类初始化**阶段，于是升级成
+     * ExceptionInInitializerError，把整个 AiCommandParser 一起带走，
+     * 连 `parseDue` 里那几个 DateTimeFormatter 都没机会被求值。
+     *
+     * 两条教训都落在下面的实现里：
+     *  1. 解析这种固定协议，手写扫描比正则更可控 —— 一共两个分隔符，而且正则
+     *     本来也处理不了「值里带 `}`」的 JSON，那条非贪婪匹配会被提前截断；
+     *  2. 静态初始化不该做任何可能失败的事。所以下面连 `Regex` 都不出现了。
      */
-    private val COMMAND_REGEX = Regex("""\[\[cmd:(\{.*?})]]""")
 
-    private val DATE_TIME_FORMATTER: DateTimeFormatter =
+    /**
+     * 时间格式器。
+     *
+     * 写成 `by lazy` 而不是直接放在属性初始化里：这三个格式串是常量、不会失败，
+     * 但**属性初始化失败等于类初始化失败**，而类初始化失败是最难定位的一类失败。
+     * 代价为零的地方，就不留这个口子。
+     */
+    private val DATE_TIME_FORMATTER: DateTimeFormatter by lazy {
         DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
+    }
 
-    private val DATE_FORMATTER: DateTimeFormatter =
+    private val DATE_FORMATTER: DateTimeFormatter by lazy {
         DateTimeFormatter.ofPattern("yyyy-MM-dd")
+    }
 
-    private val TIME_FORMATTER: DateTimeFormatter =
+    private val TIME_FORMATTER: DateTimeFormatter by lazy {
         DateTimeFormatter.ofPattern("HH:mm")
-
-    /** 连续三个以上换行压成两个，避免删掉指令行之后留下大片空白。 */
-    private val EXTRA_BLANK_LINES = Regex("\n{3,}")
+    }
 
     /**
      * 解析一条回复。
@@ -65,21 +97,142 @@ object AiCommandParser {
     fun parse(reply: String): ParsedAiReply {
         if (reply.isBlank()) return ParsedAiReply("", emptyList())
 
-        val commands = mutableListOf<AiCommand>()
+        val blocks = findCommandBlocks(reply)
 
-        for (match in COMMAND_REGEX.findAll(reply)) {
-            if (commands.size >= AiCommandLimits.MAX_COMMANDS_PER_REPLY) break
-            commands += parseSingle(match.groupValues[1])
-        }
+        // 超出的部分不执行，但仍然从正文里删掉 —— 留在聊天记录里只会让用户困惑。
+        val commands = blocks
+            .take(AiCommandLimits.MAX_COMMANDS_PER_REPLY)
+            .map { parseSingle(it.json) }
 
-        // 把指令块整段删掉，再收拾一下因此产生的空行。
-        val visible = COMMAND_REGEX.replace(reply, "")
+        val visible = stripBlocks(reply, blocks)
             .lines()
             .joinToString("\n") { it.trimEnd() }
-            .replace(EXTRA_BLANK_LINES, "\n\n")
+            .let(::collapseBlankLines)
             .trim()
 
         return ParsedAiReply(visibleText = visible, commands = commands)
+    }
+
+    // -----------------------------------------------------------------------
+    // 扫描
+    // -----------------------------------------------------------------------
+
+    /** 一条完整指令块。[start, endExclusive) 是要从正文里删掉的范围。 */
+    private data class CommandBlock(val start: Int, val endExclusive: Int, val json: String)
+
+    /**
+     * 按出现顺序找出所有**完整**的指令块。
+     *
+     * 「完整」= `[[cmd:` + 花括号配平的 JSON 对象 + `]]`。任何一步不成立就跳过这一处
+     * 继续往后找，不完整的块留在正文里让用户看见 —— 悄悄吃掉半句话比看见更糟。
+     *
+     * 多行的 JSON 会被正常识别（JSON 本身就允许换行），比原来的单行正则宽容。
+     */
+    private fun findCommandBlocks(reply: String): List<CommandBlock> {
+        val blocks = mutableListOf<CommandBlock>()
+        var cursor = 0
+
+        while (cursor < reply.length) {
+            val open = reply.indexOf(COMMAND_OPEN, cursor)
+            if (open < 0) break
+
+            val bodyStart = skipSpaces(reply, open + COMMAND_OPEN.length)
+            if (bodyStart >= reply.length || reply[bodyStart] != '{') {
+                cursor = open + COMMAND_OPEN.length
+                continue
+            }
+
+            val objectEnd = matchObjectEnd(reply, bodyStart)
+            if (objectEnd < 0) {
+                cursor = open + COMMAND_OPEN.length
+                continue
+            }
+
+            val closeStart = objectEnd + 1
+            if (!reply.startsWith(COMMAND_CLOSE, closeStart)) {
+                cursor = open + COMMAND_OPEN.length
+                continue
+            }
+
+            blocks += CommandBlock(
+                start = open,
+                endExclusive = closeStart + COMMAND_CLOSE.length,
+                json = reply.substring(bodyStart, objectEnd + 1),
+            )
+            cursor = closeStart + COMMAND_CLOSE.length
+        }
+
+        return blocks
+    }
+
+    private fun skipSpaces(text: String, from: Int): Int {
+        var index = from
+        while (index < text.length && text[index] == ' ') index++
+        return index
+    }
+
+    /**
+     * 找出 [start] 处那个 `{` 对应的 `}`，返回它的下标；不配平返回 -1。
+     *
+     * 会跳过字符串字面量和其中的转义，所以 `{"reason":"回复 } 一下"}` 不会被截断 ——
+     * 这正是原来那条非贪婪正则做不到的事。
+     */
+    private fun matchObjectEnd(text: String, start: Int): Int {
+        var depth = 0
+        var inString = false
+        var escaped = false
+        var index = start
+
+        while (index < text.length) {
+            val char = text[index]
+            if (inString) {
+                when {
+                    escaped -> escaped = false
+                    char == '\\' -> escaped = true
+                    char == '"' -> inString = false
+                }
+            } else {
+                when (char) {
+                    '"' -> inString = true
+                    '{' -> depth++
+                    '}' -> {
+                        depth--
+                        if (depth == 0) return index
+                    }
+                }
+            }
+            index++
+        }
+
+        return -1
+    }
+
+    /** 按 [blocks] 把指令块从正文里挖掉。 */
+    private fun stripBlocks(reply: String, blocks: List<CommandBlock>): String {
+        if (blocks.isEmpty()) return reply
+
+        return buildString(reply.length) {
+            var cursor = 0
+            for (block in blocks) {
+                append(reply, cursor, block.start)
+                cursor = block.endExclusive
+            }
+            append(reply, cursor, reply.length)
+        }
+    }
+
+    /** 连续三个以上换行压成两个，避免删掉指令行之后留下大片空白。 */
+    private fun collapseBlankLines(text: String): String = buildString(text.length) {
+        var run = 0
+        for (char in text) {
+            if (char == '\n') {
+                run++
+                if (run <= 2) append(char)
+            } else {
+                run = 0
+                append(char)
+            }
+        }
     }
 
     // -----------------------------------------------------------------------

@@ -27,7 +27,16 @@ import kotlin.math.sqrt
 object TextVectorizer {
 
     private val LATIN_RUN = Regex("[a-z0-9_]+")
-    private val CJK_RUN = Regex("[\\u4e00-\\u9fff]+")
+
+    /**
+     * 中文按字符区间切分。
+     *
+     * 区间两端写成**字面字符**而不是 `\\u4e00` 转义：Kotlin 在编译期就把 `\uXXXX`
+     * 变成真字符，于是运行时交给正则引擎的是一段普通区间。Android 的正则引擎是
+     * ICU，和 JVM 的转义支持并不完全一致（见 [AiCommandParser] 那次崩溃），
+     * 能不依赖转义就不依赖。
+     */
+    private val CJK_RUN = Regex("[\u4e00-\u9fff]+")
 
     /**
      * 余弦相似度。
