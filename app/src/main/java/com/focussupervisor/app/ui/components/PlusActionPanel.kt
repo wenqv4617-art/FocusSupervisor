@@ -7,10 +7,13 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.List
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.Face
 import androidx.compose.material.icons.outlined.Lock
@@ -34,13 +37,13 @@ import com.focussupervisor.app.ui.theme.FocusTheme
 /**
  * 底部「+」展开面板。
  *
- * 产品约束：主界面不允许出现任何配置类按钮。权限检查、强制锁定、注视监控、AI 配置
- * 这些入口全部收纳在这里，因此这个面板是「应用的全部控制面」。
+ * 产品约束：主界面不允许出现任何配置类按钮。权限检查、强制锁定、待办与白名单、
+ * 注视监控、AI 配置这些入口全部收纳在这里，因此这个面板是**应用的全部控制面**。
  *
  * 视觉上完全照搬微信的加号面板语言：
- * - 顶部一条发丝线与输入栏分隔；
- * - 每行 4 格，格与格等宽；
- * - 每格 = 一枚圆角白色方块（内嵌矢量图标）+ 下方一行功能名。
+ *  - 顶部一条发丝线与输入栏分隔；
+ *  - 每行 4 格，格与格等宽；
+ *  - 每格 = 一枚圆角白色方块（内嵌矢量图标）+ 下方一行功能名。
  *
  * 之所以不用 LazyVerticalGrid：面板里最多 8 个格子，且需要随展开动画一起做高度
  * 动画。惰性布局在动画中会因为「可见项才测量」而产生高度跳变，用普通的
@@ -60,11 +63,28 @@ private val ActionIconSize = 26.dp
 private val PanelHorizontalPadding = 16.dp
 private val PanelVerticalPadding = 18.dp
 
+/** 提醒红点的尺寸。 */
+private val AttentionDotSize = 9.dp
+
+/**
+ * 「+」面板里各入口的稳定 id。
+ *
+ * 单独抽出来是因为点击分发不能靠中文 label：label 是展示文案，随时可能改字，
+ * 而分发键一旦跟着改就会静默失效（点了没反应，编译还过得去）。
+ */
+object ActionIds {
+    const val PERMISSION_CHECK = "permission_check"
+    const val FORCE_LOCK_TEST = "force_lock_test"
+    const val POLICY_STATUS = "policy_status"
+    const val GAZE_MONITOR = "gaze_monitor"
+    const val AI_CONFIG = "ai_config"
+}
+
 /**
  * 「+」面板。
  *
  * @param actions 要展示的动作项。按 [COLUMNS_PER_ROW] 自动换行，超过 8 个时
- *                调用方应自行分页（当前产品方案固定为 4 个，不会触发）。
+ *                调用方应自行分页（当前固定 5 个，不会触发）。
  * @param onActionClick 点击回调。分发键用 [ActionItem.id]，不要用 label。
  */
 @Composable
@@ -118,6 +138,10 @@ fun PlusActionPanel(
  * 这是自绘的格子，套 Material 组件反而要反复覆盖它的最小尺寸、水波纹形状和
  * 内部内边距，得不偿失。indication 保留默认水波纹，但裁剪成圆角方块，
  * 让反馈落在方框内部而不是溢出一圈。
+ *
+ * [ActionItem.needsAttention] 为真时，在方块右上角点一枚红点（外圈描一圈面板底色
+ * 把它从方块上「抠」出来）。这是整个主界面上唯一允许出现的异常提示，用来把
+ * 「权限没配齐」这件事推到用户眼前，又不打扰聊天区。
  */
 @Composable
 private fun PlusActionButton(
@@ -131,20 +155,41 @@ private fun PlusActionButton(
         modifier = modifier.clickable(onClick = onClick),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Box(
-            modifier = Modifier
-                .size(ActionTileSize)
-                .clip(tileShape)
-                .background(FocusTheme.colors.inputField),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(
-                imageVector = action.icon,
-                // 纯装饰性图标：文字已经说明了功能，读屏再念一遍图标名只会更吵。
-                contentDescription = null,
-                tint = FocusTheme.colors.iconTint,
-                modifier = Modifier.size(ActionIconSize),
-            )
+        Box(modifier = Modifier.size(ActionTileSize)) {
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .clip(tileShape)
+                    .background(FocusTheme.colors.inputField),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = action.icon,
+                    // 纯装饰性图标：文字已经说明了功能，读屏再念一遍图标名只会更吵。
+                    contentDescription = null,
+                    tint = FocusTheme.colors.iconTint,
+                    modifier = Modifier.size(ActionIconSize),
+                )
+            }
+
+            if (action.needsAttention) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .offset(x = 2.dp, y = (-2).dp)
+                        .size(AttentionDotSize + 3.dp)
+                        .clip(CircleShape)
+                        .background(FocusTheme.colors.chromeBackground),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(AttentionDotSize)
+                            .clip(CircleShape)
+                            .background(FocusTheme.colors.attention),
+                    )
+                }
+            }
         }
 
         Text(
@@ -167,26 +212,34 @@ private fun PlusActionButton(
  *
  * 图标只用 material-icons-core（本模块刻意没引 icons-extended），
  * 因此可选形状有限，选择标准是「语义最先命中」：
- * CheckCircle=权限检查、Lock=强制锁定、Face=注视监控、Settings=AI 配置。
+ * CheckCircle=权限检查、Lock=强制锁定、List=待办与白名单、Face=注视监控、Settings=AI 配置。
+ *
+ * @param needsPermissionAttention 是否有权限未开启。为真时「权限检查」右上角亮红点。
  */
-fun defaultActionItems(): List<ActionItem> = listOf(
+fun defaultActionItems(needsPermissionAttention: Boolean = false): List<ActionItem> = listOf(
     ActionItem(
-        id = "permission_check",
+        id = ActionIds.PERMISSION_CHECK,
         label = "权限检查",
         icon = Icons.Outlined.CheckCircle,
+        needsAttention = needsPermissionAttention,
     ),
     ActionItem(
-        id = "force_lock_test",
+        id = ActionIds.FORCE_LOCK_TEST,
         label = "强制锁定测试",
         icon = Icons.Outlined.Lock,
     ),
     ActionItem(
-        id = "gaze_monitor",
-        label = "注视监控开关",
+        id = ActionIds.POLICY_STATUS,
+        label = "待办与白名单",
+        icon = Icons.AutoMirrored.Outlined.List,
+    ),
+    ActionItem(
+        id = ActionIds.GAZE_MONITOR,
+        label = "注视监控",
         icon = Icons.Outlined.Face,
     ),
     ActionItem(
-        id = "ai_config",
+        id = ActionIds.AI_CONFIG,
         label = "AI 配置",
         icon = Icons.Outlined.Settings,
     ),
@@ -197,7 +250,7 @@ fun defaultActionItems(): List<ActionItem> = listOf(
 private fun PlusActionPanelPreview() {
     FocusSupervisorTheme {
         PlusActionPanel(
-            actions = defaultActionItems(),
+            actions = defaultActionItems(needsPermissionAttention = true),
             onActionClick = {},
         )
     }

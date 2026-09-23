@@ -3,23 +3,36 @@ package com.focussupervisor.app
 import android.app.Application
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.content.Context
 import android.os.Build
-import com.focussupervisor.app.service.FocusMonitorService
+import com.focussupervisor.app.core.AppContainer
 
 /**
  * 应用级初始化。
  *
- * 目前只承担一件事：建好前台服务要用的通知渠道。
+ * 承担两件事：
+ *  1. 建好前台服务要用的通知渠道（必须在发出第一条通知之前就存在）；
+ *  2. 创建进程级依赖容器 [container]，供无障碍服务与界面共享同一份策略状态。
  *
- * 为什么放在 Application 而不是 Service 里：通知渠道是「建一次、全局复用」的
- * 系统资源，重复创建同名渠道是空操作但会有一堆无意义的调用；更重要的是，
- * 渠道必须在**发出第一条通知之前**就存在，否则 Android 8.0+ 会直接丢弃通知
- * 并在 logcat 里骂人。放在进程启动时创建是最省心的做法。
+ * 为什么容器在这里建而不是懒加载：无障碍服务可能在用户从未打开过界面的情况下
+ * 就被系统唤起（开机后无障碍服务会自行启动）。如果容器是懒加载的，那个时刻它会
+ * 在 Service 的调用栈里被顺手创建 —— 能跑，但初始化时机变得不可预测。放在
+ * `onCreate` 里一次建好，之后所有使用方拿到的都是同一个已就绪的实例。
  */
 class FocusSupervisorApp : Application() {
 
+    /**
+     * 进程级依赖容器。
+     *
+     * `lateinit` 是安全的：它在 `onCreate` 的第一行就被赋值，而任何使用方
+     * （Service、Activity、ViewModel）都只可能在 `onCreate` 返回之后才被系统创建。
+     */
+    lateinit var container: AppContainer
+        private set
+
     override fun onCreate() {
         super.onCreate()
+        container = AppContainer(this)
         createMonitorNotificationChannel()
     }
 
@@ -54,3 +67,17 @@ class FocusSupervisorApp : Application() {
         const val CHANNEL_ID_MONITOR = "focus_monitor"
     }
 }
+
+/**
+ * 从任意 Context 取进程级容器。
+ *
+ * 刻意放在**顶层**而不是 companion object 里：companion 里的扩展属性必须写成
+ * `import com.focussupervisor.app.FocusSupervisorApp.Companion.appContainer` 才能用，
+ * 这个导入路径又长又容易被误写成包级导入，然后得到一个很难看懂的
+ * 「unresolved reference」。放顶层就是普通的 `import ...appContainer`。
+ *
+ * 用扩展属性而不是让每个调用方自己写 `(context.applicationContext as FocusSupervisorApp)`：
+ * 强制转换散落各处时，一旦有人在测试里换成别的 Application，报错点会离现场很远。
+ */
+val Context.appContainer: AppContainer
+    get() = (applicationContext as FocusSupervisorApp).container

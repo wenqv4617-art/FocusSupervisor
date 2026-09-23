@@ -38,6 +38,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -47,14 +48,20 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.focussupervisor.app.data.mock.MockChatData
 import com.focussupervisor.app.domain.model.ActionItem
+import com.focussupervisor.app.domain.model.ChatDialog
 import com.focussupervisor.app.domain.model.ChatMessage
 import com.focussupervisor.app.domain.model.ChatUiState
+import com.focussupervisor.app.domain.model.PermissionTarget
 import com.focussupervisor.app.ui.components.MessageBubble
+import com.focussupervisor.app.ui.components.PermissionCheckDialog
 import com.focussupervisor.app.ui.components.PlusActionPanel
+import com.focussupervisor.app.ui.components.PolicyStatusDialog
 import com.focussupervisor.app.ui.components.defaultActionItems
 import com.focussupervisor.app.ui.theme.FocusSupervisorTheme
 import com.focussupervisor.app.ui.theme.FocusTheme
@@ -93,12 +100,20 @@ fun ChatRoute(
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 
+    // 每次回到前台重查一次权限：用户很可能是去设置页开完权限再回来的，
+    // 不重查的话界面会一直显示「未开启」，而他刚刚明明开好了。
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        viewModel.refreshPermissions()
+    }
+
     ChatScreen(
         uiState = uiState,
         onInputChange = viewModel::onInputChange,
         onSend = viewModel::onSend,
         onToggleActionPanel = viewModel::onToggleActionPanel,
         onActionSelected = viewModel::onActionSelected,
+        onDialogDismiss = viewModel::onDialogDismiss,
+        onOpenPermissionSettings = viewModel::onOpenPermissionSettings,
         modifier = modifier,
     )
 }
@@ -111,6 +126,8 @@ fun ChatRoute(
  * @param onSend 点击发送。
  * @param onToggleActionPanel 点击「+」展开/收起面板。
  * @param onActionSelected 点击面板里的某个功能。
+ * @param onDialogDismiss 关闭模态面板。
+ * @param onOpenPermissionSettings 请求跳转到某项权限的系统设置页。
  */
 @Composable
 fun ChatScreen(
@@ -119,6 +136,8 @@ fun ChatScreen(
     onSend: () -> Unit,
     onToggleActionPanel: () -> Unit,
     onActionSelected: (ActionItem) -> Unit,
+    onDialogDismiss: () -> Unit,
+    onOpenPermissionSettings: (PermissionTarget) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Scaffold(
@@ -144,6 +163,30 @@ fun ChatScreen(
             messages = uiState.messages,
             contentPadding = scaffoldPadding,
         )
+    }
+
+    // 模态面板画在 Scaffold 之外：它们要盖住顶栏与输入栏，而不是被挤在内容区里。
+    // 同一时刻最多只会有一个（ChatDialog 是枚举，从类型上排除了「两个都开」）。
+    when (uiState.dialog) {
+        ChatDialog.PERMISSION_CHECK -> PermissionCheckDialog(
+            permissions = uiState.permissions,
+            onOpenSettings = onOpenPermissionSettings,
+            onDismiss = onDialogDismiss,
+        )
+
+        ChatDialog.POLICY_STATUS -> {
+            // 以「面板打开的那一刻」为基准计算剩余豁免时长。用 remember 固定住，
+            // 否则每次重组都会取新时间，列表会在用户眼皮底下自己变化。
+            val nowMillis = remember(uiState.dialog) { System.currentTimeMillis() }
+            PolicyStatusDialog(
+                todos = uiState.todos,
+                whitelist = uiState.whitelist,
+                nowMillis = nowMillis,
+                onDismiss = onDialogDismiss,
+            )
+        }
+
+        null -> Unit
     }
 }
 
@@ -421,6 +464,8 @@ private fun ChatScreenPreview() {
             onSend = {},
             onToggleActionPanel = {},
             onActionSelected = {},
+            onDialogDismiss = {},
+            onOpenPermissionSettings = {},
         )
     }
 }
@@ -432,7 +477,7 @@ private fun ChatScreenPanelExpandedPreview() {
         ChatScreen(
             uiState = ChatUiState(
                 messages = MockChatData.initialMessages(),
-                actions = defaultActionItems(),
+                actions = defaultActionItems(needsPermissionAttention = true),
                 inputText = "我把手机放下了",
                 isActionPanelVisible = true,
             ),
@@ -440,6 +485,8 @@ private fun ChatScreenPanelExpandedPreview() {
             onSend = {},
             onToggleActionPanel = {},
             onActionSelected = {},
+            onDialogDismiss = {},
+            onOpenPermissionSettings = {},
         )
     }
 }

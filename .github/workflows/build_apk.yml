@@ -89,7 +89,9 @@ jobs:
         with:
           name: FocusSupervisor-debug-apk
           path: app/build/outputs/apk/debug/app-debug.apk
-          retention-days: 7
+          # 只留 1 天：这是个人免费账号，artifact 存储算在账号配额里。
+          # 需要长期保存的包应当自己下载下来，而不是指望 CI 帮你存。
+          retention-days: 1
 
       - name: 构建失败时上传日志
         if: failure()
@@ -99,5 +101,5 @@ jobs:
           path: |
             **/build/reports/**
             **/build/outputs/logs/**
-          retention-days: 7
+          retention-days: 1
           if-no-files-found: ignore

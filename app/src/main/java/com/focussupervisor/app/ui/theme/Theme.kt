@@ -61,6 +61,8 @@ data class FocusColors(
     val accent: Color,
     /** 强调色禁用态。 */
     val accentDisabled: Color,
+    /** 提醒色：面板红点、逾期待办。 */
+    val attention: Color,
 )
 
 /** 浅色实例（默认值，同时也是 Preview 的兜底值）。 */
@@ -78,6 +80,7 @@ private val LightFocusColors = FocusColors(
     iconTint = IconTint,
     accent = Accent,
     accentDisabled = AccentDisabled,
+    attention = Attention,
 )
 
 /** 深色实例。 */
@@ -95,6 +98,7 @@ private val DarkFocusColors = FocusColors(
     iconTint = DarkIconTint,
     accent = Accent,
     accentDisabled = AccentDisabled,
+    attention = DarkAttention,
 )
 
 /**

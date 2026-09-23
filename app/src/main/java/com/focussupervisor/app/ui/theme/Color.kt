@@ -56,6 +56,34 @@ val Accent = Color(0xFF07C160)
 /** 强调色不可用态（草稿为空时的发送按钮）。 */
 val AccentDisabled = Color(0xFFC6C6C6)
 
+/**
+ * 提醒色。
+ *
+ * 界面上**唯一**允许出现的「需要你处理」信号，只有两个用途：面板入口右上角的小红点、
+ * 以及逾期待办的标记。这个应用没有第二种「警告色」—— 一旦出现第二种，用户就得开始
+ * 分辨哪个红更重要，而那正是要避免的噪音。
+ */
+val Attention = Color(0xFFFA5151)
+
+// ---------------------------------------------------------------------------
+// 全屏遮罩（LockOverlayController）
+//
+// 这几个颜色不走 Compose 主题 —— 遮罩是 WindowManager 直接持有的纯 View，
+// 但色值仍然定义在这里，保证「遮罩的黑」和「界面的黑」是同一个黑。
+// ---------------------------------------------------------------------------
+
+/** 遮罩底色。比纯黑略亮一点点，避免在 OLED 上与息屏混淆。 */
+val OverlayBackground = Color(0xFF0A0A0A)
+
+/** 遮罩主提示语。 */
+val OverlayHeadline = Color(0xFFEDEDED)
+
+/** 遮罩上的包名等次要信息。 */
+val OverlayMeta = Color(0xFF6B6B6B)
+
+/** 遮罩底部出路说明。刻意比包名更暗，让它退到最后。 */
+val OverlayHint = Color(0xFF4F4F4F)
+
 // ---------------------------------------------------------------------------
 // 深色
 // ---------------------------------------------------------------------------
@@ -71,3 +99,4 @@ val DarkSystemPillText = Color(0xFF9E9E9E)
 val DarkTextPrimary = Color(0xFFEDEDED)
 val DarkTextSecondary = Color(0xFF8A8A8A)
 val DarkIconTint = Color(0xFFB0B0B0)
+val DarkAttention = Color(0xFFE0736F)

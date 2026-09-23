@@ -1,18 +1,26 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
   无障碍服务运行期配置。
-  这些值决定了系统会回调哪些事件、服务能读多少内容，直接写在这里比在
-  onServiceConnected() 里 setServiceInfo() 更清晰、也更容易被打包工具静态检查到。
+  这些值决定系统会回调哪些事件、服务能读多少内容，直接写在这里比在
+  onServiceConnected() 里 setServiceInfo() 更清晰，也更容易被静态检查到。
 
-  骨架阶段刻意「多要一点、少做一点」：
-  事件类型覆盖窗口切换与内容变化（识别前台 App 的最小集合），
-  但不监听 typeAllMask，避免无关事件造成耗电与隐私面扩大。
+  逐项说明：
+  - accessibilityEventTypes：只监听窗口切换与内容变化，是识别前台应用的最小集合。
+    刻意不用 typeAllMask —— 那会让无关事件把服务刷爆，既耗电又扩大隐私面。
+  - canRetrieveWindowContent：读取窗口内容，用于 rootInActiveWindow 取当前前台包名。
+  - flagReportViewIds / flagRetrieveInteractiveWindows：读取节点信息与交互窗口列表所必需。
+  - flagRequestFilterKeyEvents + canRequestFilterKeyEvents：**本阶段新增**，用于在遮罩
+    期间拦截返回键并强制回桌面。这是「不可绕过」的关键一环。少数定制 ROM 会限制
+    按键过滤，那种情况下服务依然工作，只是返回键会落到下层应用手里。
+  - notificationTimeout：事件合并窗口。100ms 是响应速度与耗电的折中点 ——
+    再小会让高频事件把主线程压满，再大会让遮罩明显迟到。
 -->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
     android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged"
     android:accessibilityFeedbackType="feedbackGeneric"
-    android:accessibilityFlags="flagDefault|flagReportViewIds|flagRetrieveInteractiveWindows"
+    android:accessibilityFlags="flagDefault|flagReportViewIds|flagRetrieveInteractiveWindows|flagRequestFilterKeyEvents"
     android:canRetrieveWindowContent="true"
+    android:canRequestFilterKeyEvents="true"
     android:description="@string/accessibility_service_description"
     android:notificationTimeout="100"
     android:summary="@string/accessibility_service_label" />

@@ -63,6 +63,36 @@
             - SCHEDULE_EXACT_ALARM          定时强制锁屏
          ====================================================================== -->
 
+    <!-- ======================================================================
+         7) 包可见性（Android 11+ 必须显式声明，否则 queryIntentActivities 拿不到结果）
+
+         本应用需要知道「这台设备真正的桌面 / 拨号器 / 可启动应用是哪些」，
+         用于构造「绝不允许拦截」的系统常驻白名单。这里只声明四类 intent，
+         刻意**不申请 QUERY_ALL_PACKAGES** —— 那是上架时需要专项说明的高敏感权限，
+         而白名单只需要这四类就够。
+         ====================================================================== -->
+    <queries>
+        <!-- 桌面：谁响应 HOME，谁就是桌面 -->
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.HOME" />
+        </intent>
+        <!-- 可启动应用：用于解析应用名、在面板上展示白名单 -->
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+        <!-- 拨号器：来电与拨号界面绝不能被拦 -->
+        <intent>
+            <action android:name="android.intent.action.DIAL" />
+            <data android:scheme="tel" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="tel" />
+        </intent>
+    </queries>
+
     <application
         android:name=".FocusSupervisorApp"
         android:allowBackup="false"

@@ -13,8 +13,8 @@ import androidx.compose.ui.graphics.vector.ImageVector
  *
  * 唯一的例外是 [ActionItem.icon]：按产品要求直接持有 Compose 的 [ImageVector]。
  * 严格来说这是 UI 类型泄漏进 domain，代价是 domain 需要依赖 compose-ui-graphics。
- * 在只有 4 个固定动作项的场景下，这样写比再引入一层 ActionIcon 枚举 + UI 侧映射
- * 更省事、可读性更好；如果将来动作项变成服务端下发（图标不可编译期确定），
+ * 在动作项数量固定且极少（当前 5 个）的场景下，这样写比再引入一层 ActionIcon 枚举
+ * + UI 侧映射更省事、可读性更好；如果将来动作项变成服务端下发（图标不可编译期确定），
  * 就应该把它换回字符串 key，由 UI 层负责解析成矢量图。
  */
 
@@ -63,12 +63,30 @@ data class ChatMessage(
  * @param id 稳定唯一标识，用于点击回调路由（避免用中文 label 做分发键）。
  * @param label 面板上显示的短名称。
  * @param icon 面板上的矢量图标。只用 Material 图标核心集，见 ui 层注释。
+ * @param needsAttention 是否需要在图标右上角点一个小红点。
+ *        当前只有一个用途：权限没配齐时点亮「权限检查」。这是主界面**唯一**允许
+ *        出现「异常提示」的地方 —— 把问题收进面板入口本身，而不是在主界面上加横幅。
  */
 data class ActionItem(
     val id: String,
     val label: String,
     val icon: ImageVector,
+    val needsAttention: Boolean = false,
 )
+
+/**
+ * 主界面上可能弹出的模态面板。
+ *
+ * 只有「+」面板里的入口会打开它们，关闭后回到纯聊天界面。用枚举而不是多个布尔量，
+ * 从类型上保证同一时刻最多只有一个面板 —— 两个布尔量就可能出现都为 true 的非法状态。
+ */
+enum class ChatDialog {
+    /** 权限检查：列出各项能力的当前状态，并提供跳转系统设置页的入口。 */
+    PERMISSION_CHECK,
+
+    /** 待办与白名单：展示当前待办列表与生效中的豁免。 */
+    POLICY_STATUS,
+}
 
 /**
  * 监督会话在界面上的整体状态快照。
@@ -82,6 +100,11 @@ data class ActionItem(
  * @param inputText 输入框里的草稿文本。
  * @param isActionPanelVisible 「+」面板是否展开。
  * @param actions 「+」面板里的动作项。
+ * @param dialog 当前弹出的模态面板；null 表示没有。
+ * @param permissions 最近一次权限检查的结果快照，供权限面板展示。
+ * @param todos 待办列表，供「待办与白名单」面板展示。
+ * @param whitelist 当前生效的白名单（含临时豁免），同上。
+ * @param overlayActive 全屏遮罩此刻是否挂着。顶栏副标题会据此变化。
  */
 data class ChatUiState(
     val agentName: String = "FocusSupervisor",
@@ -90,7 +113,16 @@ data class ChatUiState(
     val inputText: String = "",
     val isActionPanelVisible: Boolean = false,
     val actions: List<ActionItem> = emptyList(),
+    val dialog: ChatDialog? = null,
+    val permissions: List<PermissionStatus> = emptyList(),
+    val todos: List<TodoItem> = emptyList(),
+    val whitelist: List<WhitelistApp> = emptyList(),
+    val overlayActive: Boolean = false,
 ) {
     /** 有非空白草稿时才允许发送，避免发出一条空消息。 */
     val canSend: Boolean get() = inputText.isNotBlank()
+
+    /** 是否有未开启的权限。用于决定「权限检查」入口要不要点亮红点。 */
+    val hasMissingPermission: Boolean
+        get() = permissions.any { !it.granted }
 }
