@@ -1,6 +1,7 @@
 package com.focussupervisor.app.core
 
 import android.content.Context
+import com.focussupervisor.app.core.ai.ConversationEngine
 import com.focussupervisor.app.core.network.OpenAiCompatibleClient
 import com.focussupervisor.app.core.permission.PermissionManager
 import com.focussupervisor.app.data.datastore.AppPreferencesDataSource
@@ -9,8 +10,15 @@ import com.focussupervisor.app.data.repository.AppLabelResolver
 import com.focussupervisor.app.data.repository.AppPolicyRepository
 import com.focussupervisor.app.data.repository.CriticalPackageResolver
 import com.focussupervisor.app.data.repository.DataStoreAiConfigRepository
+import com.focussupervisor.app.data.repository.ConversationRepository
 import com.focussupervisor.app.data.repository.DataStoreAppPolicyRepository
+import com.focussupervisor.app.data.repository.DataStoreConversationRepository
+import com.focussupervisor.app.data.repository.DataStoreMemoryRepository
+import com.focussupervisor.app.data.repository.DataStorePersonaRepository
+import com.focussupervisor.app.data.repository.MemoryRepository
+import com.focussupervisor.app.data.repository.PersonaRepository
 import com.focussupervisor.app.data.repository.buildBuiltInWhitelist
+import com.focussupervisor.app.data.mock.MockChatData
 import com.focussupervisor.app.domain.model.AiPresetDefaults
 import com.focussupervisor.app.ui.overlay.LockOverlayController
 import kotlinx.coroutines.CoroutineScope
@@ -72,6 +80,25 @@ class AppContainer(context: Context) {
         scope = appScope,
     )
 
+    /** 人设：AI 与用户各自的姓名、头像、设定。 */
+    val personas: PersonaRepository = DataStorePersonaRepository(
+        context = appContext,
+        preferences = preferences,
+        scope = appScope,
+    )
+
+    /** 对话历史。 */
+    val conversation: ConversationRepository = DataStoreConversationRepository(
+        preferences = preferences,
+        scope = appScope,
+    )
+
+    /** 记忆与向量索引。 */
+    val memory: MemoryRepository = DataStoreMemoryRepository(
+        preferences = preferences,
+        scope = appScope,
+    )
+
     /** 权限状态检查与系统设置跳转。 */
     val permissions: PermissionManager = PermissionManager(appContext)
 
@@ -92,6 +119,19 @@ class AppContainer(context: Context) {
      */
     val openAiClient: OpenAiCompatibleClient = OpenAiCompatibleClient()
 
+    /**
+     * 对话编排层：把「发送 → 召回记忆 → 组装提示词 → 调模型 → 解析指令 → 上屏」
+     * 这条链路收在一个地方。界面只调用它，不碰网络、不碰提示词。
+     */
+    val conversationEngine: ConversationEngine = ConversationEngine(
+        client = openAiClient,
+        policy = policy,
+        memory = memory,
+        conversation = conversation,
+        personas = personas,
+        aiConfig = aiConfig,
+    )
+
     init {
         // 首次启动时把内置白名单与默认预置一次性灌进 DataStore。
         // 放在容器初始化里而不是某个仓库里，理由见 AppPreferencesDataSource.seedIfNeeded：
@@ -104,11 +144,32 @@ class AppContainer(context: Context) {
                 labelResolver = labelResolver,
                 criticalPackages = criticalResolver.resolve(),
             )
-            preferences.seedIfNeeded(
+            val seeded = preferences.seedIfNeeded(
                 builtInWhitelist = builtInWhitelist,
                 defaultPresets = AiPresetDefaults.defaults(),
                 defaultSelectedPresetId = AiPresetDefaults.defaultSelectedId(),
             )
+
+            // 开场白只在**真正的首次启动**写入，靠 seedIfNeeded 的返回值判断。
+            // 不用「对话是否为空」判断：用户可能自己清空过聊天记录，
+            // 那不代表他想再看一遍开场白。
+            if (seeded) {
+                preferences.replaceMessages(MockChatData.initialMessages())
+            }
         }
+
+        // 后台定期给还没向量化的记忆与对话补向量。
+        // 放在这里而不是界面里：用户不打开记忆面板的时候，索引也应该继续追上。
+        appScope.launch {
+            while (true) {
+                kotlinx.coroutines.delay(EMBED_SWEEP_INTERVAL_MILLIS)
+                conversationEngine.embedPendingMemories()
+            }
+        }
+    }
+
+    private companion object {
+        /** 后台补向量的周期。5 分钟一次，对个人使用强度足够。 */
+        const val EMBED_SWEEP_INTERVAL_MILLIS = 5 * 60 * 1000L
     }
 }

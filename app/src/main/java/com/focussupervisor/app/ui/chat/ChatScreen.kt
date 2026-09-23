@@ -58,12 +58,15 @@ import com.focussupervisor.app.domain.model.ChatDialog
 import com.focussupervisor.app.domain.model.ChatMessage
 import com.focussupervisor.app.domain.model.ChatUiState
 import com.focussupervisor.app.domain.model.PermissionTarget
+import com.focussupervisor.app.domain.model.PersonaPair
 import com.focussupervisor.app.ui.components.MessageBubble
 import com.focussupervisor.app.ui.components.PermissionCheckDialog
 import com.focussupervisor.app.ui.components.PlusActionPanel
 import com.focussupervisor.app.ui.components.PolicyStatusDialog
 import com.focussupervisor.app.ui.components.defaultActionItems
 import com.focussupervisor.app.ui.settings.AiConfigSheet
+import com.focussupervisor.app.ui.settings.MemorySheet
+import com.focussupervisor.app.ui.settings.PersonaSheet
 import com.focussupervisor.app.ui.theme.FocusSupervisorTheme
 import com.focussupervisor.app.ui.theme.FocusTheme
 
@@ -116,6 +119,8 @@ fun ChatRoute(
         onDialogDismiss = viewModel::onDialogDismiss,
         onOpenPermissionSettings = viewModel::onOpenPermissionSettings,
         onAiConfigDismiss = viewModel::onAiConfigSheetDismiss,
+        onPersonaDismiss = viewModel::onPersonaSheetDismiss,
+        onMemoryDismiss = viewModel::onMemorySheetDismiss,
         modifier = modifier,
     )
 }
@@ -131,6 +136,8 @@ fun ChatRoute(
  * @param onDialogDismiss 关闭模态面板。
  * @param onOpenPermissionSettings 请求跳转到某项权限的系统设置页。
  * @param onAiConfigDismiss 关闭「AI 配置中心」。
+ * @param onPersonaDismiss 关闭「人设管理」。
+ * @param onMemoryDismiss 关闭「记忆管理」。
  */
 @Composable
 fun ChatScreen(
@@ -142,6 +149,8 @@ fun ChatScreen(
     onDialogDismiss: () -> Unit,
     onOpenPermissionSettings: (PermissionTarget) -> Unit,
     onAiConfigDismiss: () -> Unit,
+    onPersonaDismiss: () -> Unit,
+    onMemoryDismiss: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Scaffold(
@@ -165,6 +174,7 @@ fun ChatScreen(
     ) { scaffoldPadding ->
         MessageList(
             messages = uiState.messages,
+            personas = uiState.personas,
             contentPadding = scaffoldPadding,
         )
     }
@@ -197,6 +207,14 @@ fun ChatScreen(
     // 两件互不相干的事，塞进 ChatViewModel 只会让那个类继续膨胀。
     if (uiState.isAiConfigSheetVisible) {
         AiConfigSheet(onDismiss = onAiConfigDismiss)
+    }
+
+    if (uiState.isPersonaSheetVisible) {
+        PersonaSheet(onDismiss = onPersonaDismiss)
+    }
+
+    if (uiState.isMemorySheetVisible) {
+        MemorySheet(onDismiss = onMemoryDismiss)
     }
 }
 
@@ -264,6 +282,7 @@ private fun ChatTopBar(
 @Composable
 private fun MessageList(
     messages: List<ChatMessage>,
+    personas: PersonaPair,
     contentPadding: PaddingValues,
 ) {
     val listState = rememberLazyListState()
@@ -300,7 +319,7 @@ private fun MessageList(
                     // 内部状态与滚动位置，不会整列表重画。
                     key = { message -> message.id },
                 ) { message ->
-                    MessageBubble(message = message)
+                    MessageBubble(message = message, personas = personas)
                 }
             }
         }
@@ -477,6 +496,8 @@ private fun ChatScreenPreview() {
             onDialogDismiss = {},
             onOpenPermissionSettings = {},
             onAiConfigDismiss = {},
+            onPersonaDismiss = {},
+            onMemoryDismiss = {},
         )
     }
 }
@@ -499,6 +520,8 @@ private fun ChatScreenPanelExpandedPreview() {
             onDialogDismiss = {},
             onOpenPermissionSettings = {},
             onAiConfigDismiss = {},
+            onPersonaDismiss = {},
+            onMemoryDismiss = {},
         )
     }
 }

@@ -115,6 +115,10 @@ enum class ChatDialog {
  * @param whitelist 当前生效的白名单（含临时豁免），同上。
  * @param overlayActive 全屏遮罩此刻是否挂着。顶栏副标题会据此变化。
  * @param isAiConfigSheetVisible 「AI 配置中心」是否展开。
+ * @param isPersonaSheetVisible 「人设管理」是否展开。
+ * @param isMemorySheetVisible 「记忆管理」是否展开。
+ * @param isSending 正在等模型回复。
+ * @param personas 会话双方的人设快照，供消息列表渲染头像与姓名。
  */
 data class ChatUiState(
     val agentName: String = "FocusSupervisor",
@@ -129,6 +133,10 @@ data class ChatUiState(
     val whitelist: List<WhitelistApp> = emptyList(),
     val overlayActive: Boolean = false,
     val isAiConfigSheetVisible: Boolean = false,
+    val isPersonaSheetVisible: Boolean = false,
+    val isMemorySheetVisible: Boolean = false,
+    val isSending: Boolean = false,
+    val personas: PersonaPair = PersonaPair(),
 ) {
     /** 有非空白草稿时才允许发送，避免发出一条空消息。 */
     val canSend: Boolean get() = inputText.isNotBlank()

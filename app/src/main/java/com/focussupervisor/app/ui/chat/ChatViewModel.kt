@@ -4,7 +4,7 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.focussupervisor.app.appContainer
-import com.focussupervisor.app.data.mock.MockChatData
+import com.focussupervisor.app.core.ai.SendOutcome
 import com.focussupervisor.app.domain.model.ActionItem
 import com.focussupervisor.app.domain.model.ChatDialog
 import com.focussupervisor.app.domain.model.ChatMessage
@@ -22,7 +22,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import java.util.UUID
 
 /**
  * 聊天主界面的状态持有者。
@@ -33,18 +32,26 @@ import java.util.UUID
  * ```
  *   UI ──(意图)──> ViewModel ──(新 StateFlow 值)──> UI 重组
  *                       ↑
- *   无障碍服务 / 仓库 ──(Flow)──┘
+ *   仓库（对话 / 播报 / 人设 / 白名单）──(Flow)──┘
  * ```
- * 界面里不存任何业务状态，全部收敛到这里。**同时它也是 service 层与 UI 层唯一的
- * 汇合点**：无障碍服务把拦截事件写进仓库，ViewModel 订阅仓库，把事件翻译成聊天流里
- * 的居中系统胶囊。服务层完全不知道聊天的存在。
+ * 界面里不存任何业务状态，全部收敛到这里。
  *
  * ===========================================================================
- * 为什么是 AndroidViewModel
+ * 消息列表的唯一来源是「对话仓库」
  * ===========================================================================
- * 需要拿到 `AppContainer`（仓库、遮罩控制器、权限管理器）。这三者都由
- * `Application` 持有，因此走 AndroidViewModel 的构造注入是最短路径 ——
- * 不需要自定义 Factory，`viewModel()` 的默认工厂就能创建它。
+ * 上一版把消息拼成「Mock 开场白 + 仓库播报」，那是骨架期的权宜之计。
+ * 现在所有消息（包括系统胶囊）都先落进对话仓库，再由这里读出来显示：
+ *  - 关掉应用、杀掉进程，聊天记录都还在；
+ *  - 系统胶囊也进了历史，用户回头能看见「那次拦截是什么时候发生的」。
+ *
+ * 播报变成消息只在一个地方发生（[observeNotices]），且按 id 去重 ——
+ * StateFlow 会在每个新订阅者接入时重放当前值，没有去重就会把历史播报重新插一遍。
+ *
+ * ===========================================================================
+ * 业务逻辑不在这里
+ * ===========================================================================
+ * 「组装提示词、调模型、解析并执行指令」全部在 `ConversationEngine` 里。
+ * 这个类只剩下三件事：收集状态、转发意图、显示结果。它能保持这么薄是刻意的。
  */
 class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -52,10 +59,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val policy = container.policy
     private val permissionManager = container.permissions
     private val lockOverlay = container.lockOverlay
+    private val conversation = container.conversation
+    private val personaRepository = container.personas
+    private val engine = container.conversationEngine
 
     private val _uiState = MutableStateFlow(
         ChatUiState(
-            messages = MockChatData.initialMessages(),
+            messages = emptyList(),
             actions = defaultActionItems(),
         ),
     )
@@ -63,21 +73,18 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     /** 对外只暴露只读视图，杜绝 UI 侧直接改状态。 */
     val uiState: StateFlow<ChatUiState> = _uiState.asStateFlow()
 
-    /**
-     * 已经插进会话的播报 id。
-     *
-     * StateFlow 会在每个新订阅者接入时重放一次当前值，没有这个集合，每次回到界面
-     * 都会把历史播报重新插一遍。
-     */
-    private val appendedNoticeIds = mutableSetOf<String>()
+    /** 已经转成聊天消息的播报 id，用于去重。 */
+    private val consumedNoticeIds = mutableSetOf<String>()
 
-    /** 是否已经处理过第一次播报发射（用于判断「冷启动补历史」还是「实时追加」）。 */
+    /** 是否已经处理过第一次播报发射（区分「冷启动补历史」与「实时追加」）。 */
     private var noticesSeeded = false
 
-    /** 「强制锁定测试」的定时任务。重复点击时先取消上一个，避免两个定时器互相打架。 */
+    /** 「强制锁定测试」的定时任务。重复点击时先取消上一个。 */
     private var lockTestJob: Job? = null
 
     init {
+        observeMessages()
+        observePersonas()
         observeWhitelist()
         observeTodos()
         observeNotices()
@@ -89,52 +96,44 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     // 输入与发送
     // -----------------------------------------------------------------------
 
-    /** 输入框内容变化。 */
     fun onInputChange(text: String) {
         _uiState.update { it.copy(inputText = text) }
     }
 
-    /** 展开 / 收起「+」面板。 */
     fun onToggleActionPanel() {
         _uiState.update { it.copy(isActionPanelVisible = !it.isActionPanelVisible) }
     }
 
     /**
-     * 发送当前草稿。
+     * 发送。
      *
-     * 阶段二里这一步仍然只有「用户消息 + 占位回复」—— 真正的 AI 接入在阶段三。
-     * 之所以先保留，是因为它是验证「发送 → 列表增长 → 自动滚到底」这条链路的唯一手段；
-     * 去掉它，界面就从「能验证」退化成「只能看」。
+     * 用户消息由 [com.focussupervisor.app.core.ai.ConversationEngine] 负责落库，
+     * 所以这里只做两件事：清掉输入框、把「正在等回复」的标记打开。
+     *
+     * 失败不在这里处理 —— 引擎会往会话里插一条系统胶囊说明原因，用户能在
+     * 聊天记录里看到。这里只负责把转圈停掉。
      */
     fun onSend() {
-        val current = _uiState.value
-        val draft = current.inputText.trim()
-        if (draft.isEmpty()) return
-
-        val userMessage = ChatMessage(
-            id = newMessageId(MessageSender.USER),
-            sender = MessageSender.USER,
-            text = draft,
-            timestampMillis = System.currentTimeMillis(),
-        )
+        val draft = _uiState.value.inputText.trim()
+        if (draft.isEmpty() || _uiState.value.isSending) return
 
         _uiState.update {
             it.copy(
-                messages = it.messages + userMessage,
                 inputText = "",
                 isActionPanelVisible = false,
+                isSending = true,
             )
         }
 
         viewModelScope.launch {
-            delay(AI_REPLY_DELAY_MILLIS)
-            val reply = ChatMessage(
-                id = newMessageId(MessageSender.AI),
-                sender = MessageSender.AI,
-                text = "收到。这条回复仍是占位内容，等接上模型后会替换成基于待办与白名单的真实判断。",
-                timestampMillis = System.currentTimeMillis(),
-            )
-            _uiState.update { it.copy(messages = it.messages + reply) }
+            val outcome = engine.send(draft)
+            _uiState.update { it.copy(isSending = false) }
+
+            // 「还没配置端点」是个高频且可自愈的失败：直接把配置面板弹出来，
+            // 比让用户自己去「+」里翻要少两步。
+            if (outcome is SendOutcome.NotConfigured) {
+                openSheet(SheetTarget.AI_CONFIG)
+            }
         }
     }
 
@@ -142,16 +141,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     // 「+」面板分发
     // -----------------------------------------------------------------------
 
-    /**
-     * 「+」面板里的功能被点击。
-     *
-     * 分发键用 [ActionItem.id]（见 [ActionIds]），不用中文 label —— label 是展示文案，
-     * 改字的时候分发会静默失效。
-     */
     fun onActionSelected(action: ActionItem) {
         when (action.id) {
             ActionIds.PERMISSION_CHECK -> {
-                // 打开前先重查一遍：用户可能刚从设置页回来。
                 refreshPermissions()
                 openDialog(ChatDialog.PERMISSION_CHECK)
             }
@@ -160,16 +152,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
             ActionIds.POLICY_STATUS -> openDialog(ChatDialog.POLICY_STATUS)
 
-            ActionIds.AI_CONFIG -> {
-                // 「AI 配置中心」是 ModalBottomSheet，不走 ChatDialog。
-                // 先收起「+」面板，否则输入法弹起来之后面板还挂在 Sheet 底下。
-                _uiState.update {
-                    it.copy(
-                        isAiConfigSheetVisible = true,
-                        isActionPanelVisible = false,
-                    )
-                }
-            }
+            ActionIds.PERSONA_MANAGE -> openSheet(SheetTarget.PERSONA)
+
+            ActionIds.MEMORY_MANAGE -> openSheet(SheetTarget.MEMORY)
+
+            ActionIds.AI_CONFIG -> openSheet(SheetTarget.AI_CONFIG)
 
             else -> {
                 _uiState.update { it.copy(isActionPanelVisible = false) }
@@ -178,15 +165,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** 关闭「AI 配置中心」。 */
-    fun onAiConfigSheetDismiss() {
-        _uiState.update { it.copy(isAiConfigSheetVisible = false) }
-    }
-
-    /** 关闭当前模态面板。 */
     fun onDialogDismiss() {
         _uiState.update { it.copy(dialog = null) }
     }
+
+    fun onAiConfigSheetDismiss() = closeSheet(SheetTarget.AI_CONFIG)
+
+    fun onPersonaSheetDismiss() = closeSheet(SheetTarget.PERSONA)
+
+    fun onMemorySheetDismiss() = closeSheet(SheetTarget.MEMORY)
 
     /**
      * 跳转到某项权限的系统设置页。
@@ -200,13 +187,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** 重新采集权限状态。界面回到前台时调用。 */
     fun refreshPermissions() {
         val snapshot = permissionManager.snapshot()
         _uiState.update { state ->
             state.copy(
                 permissions = snapshot,
-                // 有权限没开就在「权限检查」上点红点 —— 主界面唯一允许的异常提示。
                 actions = defaultActionItems(
                     needsPermissionAttention = snapshot.any { !it.granted },
                 ),
@@ -220,11 +205,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     // -----------------------------------------------------------------------
 
     /**
-     * 「强制锁定测试」：拉起遮罩 5 秒后自动解除，并在会话里留一条结果播报。
-     *
-     * 为什么不直接调 `LockOverlayController` 就完事：这个入口的价值在于**验证**。
-     * 用户点它，是为了确认三件事都通了 —— 悬浮窗权限拿到了、遮罩能盖住整屏、
-     * 并且真的能解除。所以结果必须以播报的形式落进会话，而不是一闪而过。
+     * 「强制锁定测试」：拉起遮罩 5 秒后自动解除。
      *
      * 遮罩的解除放在 `finally` 里：即使协程被取消（用户中途退出界面），遮罩也一定会
      * 被撤掉。**任何情况下都不能留下一块解除不掉的黑屏。**
@@ -260,8 +241,30 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     // -----------------------------------------------------------------------
-    // 订阅仓库与遮罩状态
+    // 订阅
     // -----------------------------------------------------------------------
+
+    private fun observeMessages() {
+        viewModelScope.launch {
+            conversation.messages.collect { messages ->
+                _uiState.update { it.copy(messages = messages) }
+            }
+        }
+    }
+
+    private fun observePersonas() {
+        viewModelScope.launch {
+            personaRepository.personas.collect { pair ->
+                _uiState.update {
+                    it.copy(
+                        personas = pair,
+                        // 顶栏显示 AI 的名字 —— 用户给它起的名字应该出现在最显眼的位置。
+                        agentName = pair.ai.name,
+                    )
+                }
+            }
+        }
+    }
 
     private fun observeWhitelist() {
         viewModelScope.launch {
@@ -280,13 +283,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * 把系统播报并入会话。
+     * 把系统播报并入对话历史。
      *
      * 冷启动与实时两种情况的处理刻意不同：
-     *  - **实时**（界面开着时发生拦截）：来一条插一条，用户能当场看见；
-     *  - **冷启动**（应用没开时服务已经在拦）：只补最近 [COLD_START_NOTICE_LIMIT] 条。
-     *    仓库里最多存着 200 条，一次性倒进会话会把开场白冲得无影无踪，那不是
-     *    「告知」而是「刷屏」。
+     *  - **实时**（界面开着时发生）：来一条插一条，用户能当场看见；
+     *  - **冷启动**（应用没开时服务已经在拦）：只补最近几条。仓库里最多存着 200 条，
+     *    一次性倒进会话会把开场白冲得无影无踪，那不是「告知」而是「刷屏」。
      */
     private fun observeNotices() {
         viewModelScope.launch {
@@ -294,28 +296,16 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 val isColdStart = !noticesSeeded
                 noticesSeeded = true
 
-                val fresh = notices.filterNot { it.id in appendedNoticeIds }
+                val fresh = notices.filterNot { it.id in consumedNoticeIds }
                 if (fresh.isEmpty()) return@collect
-                fresh.forEach { appendedNoticeIds += it.id }
+                fresh.forEach { consumedNoticeIds += it.id }
 
                 val toAppend = if (isColdStart) fresh.takeLast(COLD_START_NOTICE_LIMIT) else fresh
-
-                _uiState.update { state ->
-                    state.copy(
-                        messages = (state.messages + toAppend.map { it.toChatMessage() })
-                            .takeLast(MAX_MESSAGES),
-                    )
-                }
+                toAppend.forEach { notice -> conversation.append(notice.toChatMessage()) }
             }
         }
     }
 
-    /**
-     * 跟随遮罩的显示状态，把顶栏副标题切换成「监管中 · 已压制」。
-     *
-     * 这是用户在被遮罩拦住之后，回到应用时能看到的第一个反馈：刚才那次压制确实
-     * 发生过，而且现在还在生效。
-     */
     private fun observeOverlay() {
         viewModelScope.launch {
             lockOverlay.isShowing.collect { showing ->
@@ -332,7 +322,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     /**
      * 顶栏副标题文案。
      *
-     * 三种状态对应三件不同的事，顺序不能反：正在压制 > 能力就绪 > 权限没配齐。
+     * 顺序不能反：正在压制 > 能力就绪 > 权限没配齐。
      */
     private fun computeStatusText(
         permissions: List<PermissionStatus>,
@@ -348,22 +338,46 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         return if (accessibilityReady && overlayReady) "已连接 · 监督中" else "已连接 · 待授权"
     }
 
+    // -----------------------------------------------------------------------
+    // 面板开关
+    // -----------------------------------------------------------------------
+
+    /** 三个 BottomSheet 的标识。 */
+    private enum class SheetTarget { AI_CONFIG, PERSONA, MEMORY }
+
     private fun openDialog(dialog: ChatDialog) {
         _uiState.update {
-            it.copy(
-                dialog = dialog,
-                isActionPanelVisible = false,
-            )
+            it.copy(dialog = dialog, isActionPanelVisible = false)
         }
     }
 
     /**
-     * ViewModel 被销毁。
+     * 打开一个 BottomSheet。
      *
-     * 只解除「测试遮罩」—— 判据是被遮罩盖住的包名恰好是本应用自己，那是
-     * [runLockTest] 的特征。真实拦截的遮罩归无障碍服务管（它在 `onDestroy` 里
-     * 无条件撤掉），在这里误撤会打断一次有效的拦截。
+     * 三个 Sheet 互斥是通过「每次只把一个置 true」保证的，而不是三个独立开关 ——
+     * 后者迟早会出现两个同时为真的状态，那时界面上会叠两层遮罩。
      */
+    private fun openSheet(target: SheetTarget) {
+        _uiState.update {
+            it.copy(
+                isActionPanelVisible = false,
+                isAiConfigSheetVisible = target == SheetTarget.AI_CONFIG,
+                isPersonaSheetVisible = target == SheetTarget.PERSONA,
+                isMemorySheetVisible = target == SheetTarget.MEMORY,
+            )
+        }
+    }
+
+    private fun closeSheet(target: SheetTarget) {
+        _uiState.update {
+            when (target) {
+                SheetTarget.AI_CONFIG -> it.copy(isAiConfigSheetVisible = false)
+                SheetTarget.PERSONA -> it.copy(isPersonaSheetVisible = false)
+                SheetTarget.MEMORY -> it.copy(isMemorySheetVisible = false)
+            }
+        }
+    }
+
     override fun onCleared() {
         super.onCleared()
         val selfPackage = getApplication<Application>().packageName
@@ -371,9 +385,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             lockOverlay.dismiss()
         }
     }
-
-    private fun newMessageId(sender: MessageSender): String =
-        "${sender.name.lowercase()}-${UUID.randomUUID()}"
 
     private fun SystemNotice.toChatMessage(): ChatMessage = ChatMessage(
         id = id,
@@ -383,19 +394,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     )
 
     private companion object {
-        /** AI 占位回复的模拟延迟，让「思考中」不至于快到看不见。 */
-        const val AI_REPLY_DELAY_MILLIS = 600L
-
-        /** 强制锁定测试的持续时长。 */
         const val LOCK_TEST_DURATION_MILLIS = 5_000L
-
-        /** 测试遮罩上的提示语，与真实拦截的文案刻意区分开。 */
         const val LOCK_TEST_HEADLINE = "强制锁定测试 · 5 秒后自动解除"
-
-        /** 冷启动时最多补几条历史播报。 */
         const val COLD_START_NOTICE_LIMIT = 6
-
-        /** 会话消息上限。长时间运行的应用不设上限就是慢性内存泄漏。 */
-        const val MAX_MESSAGES = 300
     }
 }

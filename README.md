@@ -1,7 +1,7 @@
 # FocusSupervisor
 
-AI 监督自律 App。当前处于**阶段三**：本地持久化、OpenAI 兼容通信层与 AI 配置中心
-已经就位；真正调用模型的「白名单审批」与「TodoList 盘问」还差最后一层业务编排。
+AI 监督自律 App。当前处于**阶段四**：模型真正接进对话链路，具备人设、分层记忆、
+TodoList 注入与「AI 主动申请白名单」。
 
 ---
 
@@ -11,8 +11,8 @@ AI 监督自律 App。当前处于**阶段三**：本地持久化、OpenAI 兼�
 | --- | --- | --- |
 | 一 | 工程骨架、仿微信界面、CI 打包 | 已完成 |
 | 二 | 权限引导、动态白名单、全屏遮罩、TodoList 数据地基 | 已完成 |
-| 三 | DataStore 持久化、OpenAI 兼容通信层、AI 配置中心 | 当前 |
-| 四 | TodoList 盘问、AI 白名单审批（调用模型） | 未开始 |
+| 三 | DataStore 持久化、OpenAI 兼容通信层、AI 配置中心 | 已完成 |
+| 四 | 对话链路、人设、分层记忆、指令上屏、TodoList 注入 | 当前 |
 
 ## 交付物一览
 
@@ -39,6 +39,14 @@ AI 监督自律 App。当前处于**阶段三**：本地持久化、OpenAI 兼�
 | 权限 / 待办与白名单面板 | `ui/components/PolicyDialogs.kt` |
 | 仿微信聊天主界面 | `ui/chat/ChatScreen.kt` |
 | 状态持有者（service ↔ UI 的唯一汇合点） | `ui/chat/ChatViewModel.kt` |
+| 对话编排（提示词 → 模型 → 指令 → 上屏） | `core/ai/ConversationEngine.kt` |
+| 提示词组装（前置提示 / 人设 / 记忆 / 待办 / 白名单） | `core/ai/PromptAssembler.kt` |
+| AI 指令协议解析 | `core/ai/AiCommandParser.kt` |
+| 向量与关键词打分 | `core/ai/TextVectorizer.kt` |
+| 人设仓库（含头像落盘） | `data/repository/PersonaRepository.kt` |
+| 对话仓库 | `data/repository/ConversationRepository.kt` |
+| 记忆仓库（三层 + 提升 + 向量索引） | `data/repository/MemoryRepository.kt` |
+| 人设 / 记忆管理面板 | `ui/settings/PersonaSheet.kt`、`ui/settings/MemorySheet.kt` |
 | 启动图标生成器 | `tools/generate_icons.mjs` |
 
 ## 技术栈
@@ -186,12 +194,65 @@ EncryptedSharedPreferences 依赖 Android Keystore，而它在部分定制 ROM �
 （见 `res/xml/network_security_config.xml`），云端端点必须走 HTTPS。局域网里的
 `http://192.168.x.x` 不在放行之列。
 
+## AI 怎么真的做事
+
+模型只能输出文本，所以约定了一套**结构化指令**。它在回复末尾另起一行输出：
+
+```
+[[cmd:{"type":"whitelist","package":"com.tencent.mm","minutes":10,"reason":"回工作消息"}]]
+```
+
+应用把它解析出来、**从可见文本里删掉**、执行、再以一条居中的系统胶囊上屏：
+`[系统] AI 已放行 微信 · 10 分钟 · 理由：回工作消息`。
+用户永远看不到那串 JSON。
+
+**指令集是白名单式的，不是「模型让系统干什么就干什么」**：
+
+| 能做 | 不能做 |
+| --- | --- |
+| 开临时豁免（上限 60 分钟） | 开永久豁免 |
+| 撤销临时豁免 | 碰设备关键应用（桌面 / 输入法 / 电话） |
+| 写待办、勾选待办 | 改人设、前置提示、API 配置 |
+| 写记忆 | 打开任意 URL 或启动任意应用 |
+
+上限由 `AiCommandLimits` 一处定义；解析时就把模型的请求夹到合法区间，
+不依赖调用方记得校验。
+
+## 记忆是怎么分层的
+
+```
+  写入（用户 / AI）
+       │
+       ▼
+  短期记忆 ──被召回 3 次──▶ 长久记忆
+       │                        │
+       └────────┬───────────────┘
+                ▼
+     向量索引（记忆条目 + 对话原文共用同一个向量空间）
+                │
+                ▼
+     召回：余弦相似度 Top-K ──▶ 注入提示词
+```
+
+判据是**被召回次数**，不是创建时间、也不是用户手动标星：时间筛不掉一次性噪音，
+而用户恰恰是记不住的那个人。反复被检索到才是「这件事对他真的重要」的客观证据 ——
+每一次检索都源于一句真实的当前输入。所以 `MemoryRepository.recall()` 是唯一一个
+**读操作会写数据**的方法，那是设计要求，不是副作用。
+
+没有配向量模型时不会失灵，只会变差：文档照样进索引，召回退回关键词打分
+（中文按字符二元组），提升机制照常工作。补上向量模型后会自动把积压的补上。
+
+**向量存储**：归一化 → 8bit 量化 → Base64。一个 1536 维向量从约 14KB 压到约 2KB。
+不这么做的话，500 条文档就是 7MB 的 JSON，而 DataStore 每次写入都要重写整份 ——
+那是能把手机卡出白屏的量级。
+
 ## 阶段边界（现在还没有的东西）
 
-- **还没有真正调用模型**：通信层只有 `fetchModels` 与 `testConnection` 两个方法，
-  白名单审批（`grantTemporaryWhitelist`）接口已经就位，但还没有调用方；
-- **待办仍是样例数据**：仓库里预置了两条，只为让面板有东西可展示，等接上真正的
-  TodoList 盘问后应删掉；
+- **没有流式输出**：对话是一次性等模型生成完再上屏，没有逐字效果；
+- **没有「盘问」**：TodoList 会注入提示词，但还没有「到点主动问进度」的定时逻辑；
+- **待办仍是样例数据**：仓库里预置了两条，只为让面板有东西可展示；
 - **注视监控未实现**：`FocusMonitorService` 能正确进入前台态，但不会被自动拉起；
-- **没有 release 签名构建**，没有单元测试（JSON 编解码目前是纯函数，可直接测，
-  但 `org.json` 在 JVM 单测里不可用 —— 要补测试得先把它换成 kotlinx.serialization）。
+- **向量索引有硬上限**：最近 300 条对话原文参与语义召回，更早的仍在聊天记录里可翻看。
+  要突破这个上限，应该把索引挪出 DataStore（独立文件或 Room），而不是把数字调大；
+- **没有 release 签名构建**，没有单元测试（编解码是纯函数可直接测，
+  但 `org.json` 在 JVM 单测里不可用 —— 要补测试得先换成 kotlinx.serialization）。

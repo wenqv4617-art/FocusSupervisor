@@ -12,10 +12,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
@@ -28,11 +25,8 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -41,7 +35,6 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.focussupervisor.app.domain.model.AiConfig
-import com.focussupervisor.app.domain.model.AiPreset
 import com.focussupervisor.app.ui.theme.FocusTheme
 import kotlin.math.roundToInt
 
@@ -51,14 +44,16 @@ import kotlin.math.roundToInt
  * 从底部「+」面板里的「AI 配置」自底向上滑出，是整个应用**唯一**需要用户坐下来
  * 填东西的地方，因此也是唯一允许出现输入框的界面。
  *
- * 结构自上而下四段，正好对应四个问题：
+ * 结构自上而下，正好对应几个递进的问题：
  * ```
- *   预设栏   我在配哪一套？
- *   地址/Key 连到哪里、拿什么身份连？
- *   模型     用哪个模型？（可以点「拉取」让端点自己报）
- *   温度     它该多发散？
+ *   预设栏     我在配哪一套？
+ *   地址 / Key 连到哪里、拿什么身份连？
+ *   对话模型   用哪个模型说话？
+ *   向量模型   用哪个模型做记忆检索？（可留空）
+ *   温度       它该多发散？
+ *   前置提示   有什么必须先于一切生效的设定？
  *   ─────────
- *   测试连接 以上全部是否真的能用？
+ *   测试连接   以上全部是否真的能用？
  * ```
  *
  * 视觉上完全沿用主界面的克制基调：没有卡片、没有阴影、没有第二强调色。
@@ -82,9 +77,6 @@ fun AiConfigSheet(
     LaunchedEffect(uiState.dismissRequested) {
         if (!uiState.dismissRequested) return@LaunchedEffect
 
-        // 先让收起动画播完，再真正把 Sheet 从组合里摘掉；直接调 onDismiss 会让它
-        // 「啪」地消失而不是滑下去。
-        //
         // 这里显式 catch Throwable 是有意的：hide() 在动画被取消时抛
         // CancellationException，而那种情况下 Sheet 本来就在关，接下来的收尾
         // 必须照常执行 —— 漏掉 onDismiss 会让面板永远卡在屏幕上。
@@ -111,9 +103,12 @@ fun AiConfigSheet(
             onBaseUrlChange = viewModel::onBaseUrlChange,
             onApiKeyChange = viewModel::onApiKeyChange,
             onModelChange = viewModel::onModelChange,
+            onEmbeddingModelChange = viewModel::onEmbeddingModelChange,
+            onPrePromptChange = viewModel::onPrePromptChange,
             onTemperatureChange = viewModel::onTemperatureChange,
             onToggleApiKeyVisibility = viewModel::toggleApiKeyVisibility,
             onFetchModels = viewModel::fetchModels,
+            onFetchEmbeddingModels = viewModel::fetchEmbeddingModels,
             onModelPicked = viewModel::onModelPicked,
             onModelPickerDismiss = viewModel::onModelPickerDismiss,
             onSaveCurrent = viewModel::saveCurrentPreset,
@@ -135,9 +130,12 @@ private fun AiConfigContent(
     onBaseUrlChange: (String) -> Unit,
     onApiKeyChange: (String) -> Unit,
     onModelChange: (String) -> Unit,
+    onEmbeddingModelChange: (String) -> Unit,
+    onPrePromptChange: (String) -> Unit,
     onTemperatureChange: (Float) -> Unit,
     onToggleApiKeyVisibility: () -> Unit,
     onFetchModels: () -> Unit,
+    onFetchEmbeddingModels: () -> Unit,
     onModelPicked: (String) -> Unit,
     onModelPickerDismiss: () -> Unit,
     onSaveCurrent: () -> Unit,
@@ -149,11 +147,12 @@ private fun AiConfigContent(
         modifier = Modifier
             .fillMaxWidth()
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 20.dp)
-            .padding(bottom = 24.dp),
-        verticalArrangement = Arrangement.spacedBy(18.dp),
+            .padding(horizontal = SheetHorizontalPadding)
+            .padding(bottom = SheetBottomPadding),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        SheetTitle()
+        SheetTitle(text = "AI 配置中心")
+
         PresetBar(
             uiState = uiState,
             onPresetSelected = onPresetSelected,
@@ -162,26 +161,27 @@ private fun AiConfigContent(
             onDeletePreset = onDeletePreset,
         )
 
-        SheetField(
+        SheetTextField(
             label = "预设名称",
             value = uiState.draftName,
             onValueChange = onNameChange,
             placeholder = "给这套配置起个名字",
         )
 
-        SheetField(
+        SheetTextField(
             label = "Base URL",
             value = uiState.draft.baseUrl,
             onValueChange = onBaseUrlChange,
             placeholder = "https://api.deepseek.com/v1",
             monospace = true,
+            footer = baseUrlFooter(uiState.draft.baseUrl),
         )
 
-        SheetField(
+        SheetTextField(
             label = "API Key",
             value = uiState.draft.apiKey,
             onValueChange = onApiKeyChange,
-            placeholder = "本地端点可留空",
+            placeholder = "本地端点或免鉴权中转站可留空",
             monospace = true,
             visualTransformation = if (uiState.isApiKeyVisible) {
                 VisualTransformation.None
@@ -197,34 +197,42 @@ private fun AiConfigContent(
                     )
                 }
             },
-            footer = "Key 以明文保存在本机应用私有目录，不会上传到除你填写的端点之外的任何地方。",
+            footer = "Key 以明文保存在本机应用私有目录，只会发往你填写的这个端点。",
         )
 
-        SheetField(
-            label = "模型",
+        SheetTextField(
+            label = "对话模型",
             value = uiState.draft.model,
             onValueChange = onModelChange,
             placeholder = "deepseek-chat",
             monospace = true,
             trailing = {
-                TextButton(onClick = onFetchModels, enabled = !uiState.isFetchingModels) {
-                    Text(
-                        text = if (uiState.isFetchingModels) "拉取中" else "拉取",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = if (uiState.isFetchingModels) {
-                            FocusTheme.colors.textSecondary
-                        } else {
-                            FocusTheme.colors.accent
-                        },
-                    )
-                }
+                FetchButton(
+                    isFetching = uiState.isFetchingModels,
+                    onClick = onFetchModels,
+                )
             },
+        )
+
+        SheetTextField(
+            label = "向量模型（可选）",
+            value = uiState.draft.embeddingModel,
+            onValueChange = onEmbeddingModelChange,
+            placeholder = "text-embedding-3-small",
+            monospace = true,
+            trailing = {
+                FetchButton(
+                    isFetching = uiState.isFetchingModels,
+                    onClick = onFetchEmbeddingModels,
+                )
+            },
+            footer = "用于记忆检索。留空则记忆退回关键词匹配，功能可用但召回质量会差一些。",
         )
 
         if (uiState.isModelPickerVisible && uiState.fetchedModels.isNotEmpty()) {
             ModelPicker(
                 models = uiState.fetchedModels,
-                currentModel = uiState.draft.model,
+                currentModel = uiState.currentPickerValue(),
                 onModelPicked = onModelPicked,
                 onDismiss = onModelPickerDismiss,
             )
@@ -235,41 +243,37 @@ private fun AiConfigContent(
             onTemperatureChange = onTemperatureChange,
         )
 
-        MessageLine(uiState = uiState)
+        SheetTextField(
+            label = "前置提示（破限）",
+            value = uiState.draft.prePrompt,
+            onValueChange = onPrePromptChange,
+            placeholder = "这里的文字会被**逐字**放在整段提示词的最前面，\n先于人设、记忆、待办与一切功能。",
+            singleLine = false,
+            minHeight = 110,
+            footer = "留空则不注入。位置在所有内容之前，因此它压过人设与全部系统规则。",
+        )
 
-        Button(
-            onClick = onTestConnection,
+        SheetMessageLine(message = uiState.message, isError = uiState.isMessageError)
+
+        SheetPrimaryButton(
+            text = if (uiState.isTesting) "测试中…" else "测试连接",
             enabled = uiState.canTest,
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(8.dp),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = FocusTheme.colors.accent,
-                contentColor = Color.White,
-                disabledContainerColor = FocusTheme.colors.accentDisabled,
-                disabledContentColor = Color.White,
-            ),
-        ) {
-            Text(
-                text = if (uiState.isTesting) "测试中…" else "测试连接",
-                style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.padding(vertical = 4.dp),
-            )
-        }
+            onClick = onTestConnection,
+        )
     }
 }
+
+/** 明文 HTTP 的即时提醒。 */
+private fun baseUrlFooter(baseUrl: String): String =
+    if (baseUrl.trim().startsWith("http://", ignoreCase = true)) {
+        "注意：这是明文 HTTP，Key 会在链路上以明文传输。"
+    } else {
+        "填域名即可，会自动尝试补 /v1；中转站的路径也会依次试过。"
+    }
 
 // ---------------------------------------------------------------------------
 // 预设栏
 // ---------------------------------------------------------------------------
-
-@Composable
-private fun SheetTitle() {
-    Text(
-        text = "AI 配置中心",
-        style = MaterialTheme.typography.titleMedium,
-        color = FocusTheme.colors.textPrimary,
-    )
-}
 
 /**
  * 预设管理栏：横向切换 + 保存当前 + 新建 + 删除。
@@ -286,7 +290,7 @@ private fun PresetBar(
     onDeletePreset: () -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        SectionLabel(text = "预设")
+        SheetSectionLabel(text = "预设")
 
         Row(
             modifier = Modifier
@@ -295,14 +299,16 @@ private fun PresetBar(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             uiState.presets.forEach { preset ->
-                PresetChip(
-                    preset = preset,
+                SheetChip(
+                    text = preset.name,
                     selected = preset.id == uiState.selectedPresetId,
                     onClick = { onPresetSelected(preset.id) },
                 )
             }
-            PresetChip(
-                preset = null,
+            // 「新建」复用同一个外形，让它在视觉上就是列表里的下一个位置，
+            // 而不是一个额外的动作按钮。
+            SheetChip(
+                text = "＋ 新建",
                 selected = false,
                 onClick = onCreatePreset,
             )
@@ -333,128 +339,23 @@ private fun PresetBar(
     }
 }
 
-/**
- * 一枚预设胶囊。
- *
- * @param preset 传 null 表示这是末尾的「新建」按钮 —— 复用同一个外形，
- *        让「新建」看起来就是列表里的下一个位置，而不是一个额外的动作按钮。
- */
+/** 「拉取」按钮，两个模型字段共用。 */
 @Composable
-private fun PresetChip(
-    preset: AiPreset?,
-    selected: Boolean,
-    onClick: () -> Unit,
-) {
-    val background = when {
-        selected -> FocusTheme.colors.accent
-        else -> FocusTheme.colors.inputField
-    }
-    val contentColor = when {
-        selected -> Color.White
-        preset == null -> FocusTheme.colors.textSecondary
-        else -> FocusTheme.colors.textPrimary
-    }
-
-    Box(
-        modifier = Modifier
-            .clip(RoundedCornerShape(percent = 50))
-            .background(background)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 7.dp),
-    ) {
+private fun FetchButton(isFetching: Boolean, onClick: () -> Unit) {
+    TextButton(onClick = onClick, enabled = !isFetching) {
         Text(
-            text = preset?.name ?: "＋ 新建",
+            text = if (isFetching) "拉取中" else "拉取",
             style = MaterialTheme.typography.bodySmall,
-            color = contentColor,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
+            color = if (isFetching) FocusTheme.colors.textSecondary else FocusTheme.colors.accent,
         )
-    }
-}
-
-// ---------------------------------------------------------------------------
-// 输入框
-// ---------------------------------------------------------------------------
-
-/**
- * 一个带标签的输入框。
- *
- * 自绘而不是用 Material 的 `OutlinedTextField`：后者自带 label 浮动动画、外框、
- * 最小高度和一组内边距，为了得到这里这种「一行标签 + 一个白底圆角条」需要覆盖
- * 十几项参数。`BasicTextField` 没有被弃用，它是做自定义输入框的正确起点。
- *
- * @param trailing 右侧附加内容（例如 Key 的显示/隐藏、模型的拉取按钮）
- * @param footer 输入框下方的灰色说明文字
- */
-@Composable
-private fun SheetField(
-    label: String,
-    value: String,
-    onValueChange: (String) -> Unit,
-    placeholder: String,
-    monospace: Boolean = false,
-    visualTransformation: VisualTransformation = VisualTransformation.None,
-    trailing: (@Composable () -> Unit)? = null,
-    footer: String? = null,
-) {
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        SectionLabel(text = label)
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            BasicTextField(
-                value = value,
-                onValueChange = onValueChange,
-                modifier = Modifier
-                    .weight(1f)
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(FocusTheme.colors.inputField)
-                    .padding(horizontal = 10.dp, vertical = 10.dp),
-                textStyle = MaterialTheme.typography.bodyMedium.copy(
-                    color = FocusTheme.colors.textPrimary,
-                    fontFamily = if (monospace) FontFamily.Monospace else FontFamily.Default,
-                ),
-                cursorBrush = SolidColor(FocusTheme.colors.accent),
-                singleLine = true,
-                visualTransformation = visualTransformation,
-                decorationBox = { innerTextField ->
-                    Box(contentAlignment = Alignment.CenterStart) {
-                        if (value.isEmpty()) {
-                            Text(
-                                text = placeholder,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = FocusTheme.colors.textSecondary,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
-                        innerTextField()
-                    }
-                },
-            )
-
-            if (trailing != null) {
-                Box(modifier = Modifier.padding(start = 4.dp)) { trailing() }
-            }
-        }
-
-        if (footer != null) {
-            Text(
-                text = footer,
-                style = MaterialTheme.typography.bodySmall,
-                color = FocusTheme.colors.textSecondary,
-            )
-        }
     }
 }
 
 /**
  * 模型选择器。
  *
- * 点「拉取」成功后展开，直接点一行填进模型框。做成内联的下拉而不是弹出对话框：
- * 用户此刻的注意力就在「模型」这一行上，就地展开最省一次视线跳转。
+ * 点「拉取」成功后展开，直接点一行填进对应的模型框。做成内联的下拉而不是弹出
+ * 对话框：用户此刻的注意力就在那一行上，就地展开最省一次视线跳转。
  */
 @Composable
 private fun ModelPicker(
@@ -468,15 +369,14 @@ private fun ModelPicker(
             .fillMaxWidth()
             .clip(RoundedCornerShape(6.dp))
             .background(FocusTheme.colors.inputField)
+            // heightIn 必须在 verticalScroll **之前**：外层 Column 已经是一个
+            // 纵向滚动容器，内层滚动若拿到无限高约束会直接抛异常。
             .heightIn(max = 220.dp)
             .verticalScroll(rememberScrollState()),
     ) {
         models.forEachIndexed { index, model ->
             if (index > 0) {
-                HorizontalDivider(
-                    thickness = 0.5.dp,
-                    color = FocusTheme.colors.hairline,
-                )
+                HorizontalDivider(thickness = 0.5.dp, color = FocusTheme.colors.hairline)
             }
             Text(
                 text = model,
@@ -496,15 +396,18 @@ private fun ModelPicker(
         }
 
         HorizontalDivider(thickness = 0.5.dp, color = FocusTheme.colors.hairline)
-        Text(
-            text = "收起",
-            style = MaterialTheme.typography.bodySmall,
-            color = FocusTheme.colors.textSecondary,
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .clickable(onClick = onDismiss)
                 .padding(horizontal = 12.dp, vertical = 11.dp),
-        )
+        ) {
+            Text(
+                text = "收起",
+                style = MaterialTheme.typography.bodySmall,
+                color = FocusTheme.colors.textSecondary,
+            )
+        }
     }
 }
 
@@ -526,14 +429,12 @@ private fun TemperatureRow(
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Row(
             modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
+            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
         ) {
-            SectionLabel(text = "Temperature", modifier = Modifier.weight(1f))
+            SheetSectionLabel(text = "Temperature", modifier = Modifier.weight(1f))
             Text(
                 text = formatTemperature(temperature),
-                style = MaterialTheme.typography.bodySmall.copy(
-                    fontFamily = FontFamily.Monospace,
-                ),
+                style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
                 color = FocusTheme.colors.textPrimary,
             )
         }
@@ -565,37 +466,3 @@ private const val TEMPERATURE_STEPS = 14
 /** 只显示一位小数，避免浮点误差把 0.7000001 画到界面上。 */
 private fun formatTemperature(value: Float): String =
     String.format(java.util.Locale.US, "%.1f", (value * 10).roundToInt() / 10f)
-
-// ---------------------------------------------------------------------------
-// 提示与标签
-// ---------------------------------------------------------------------------
-
-/**
- * 提示行。
- *
- * 错误用低饱和红（[FocusTheme.colors.attention]），成功/普通提示用次级灰 ——
- * 刻意不给成功配一个绿色，那样界面会变成红绿灯。
- */
-@Composable
-private fun MessageLine(uiState: AiConfigUiState) {
-    val message = uiState.message ?: return
-    Text(
-        text = message,
-        style = MaterialTheme.typography.bodySmall,
-        color = if (uiState.isMessageError) {
-            FocusTheme.colors.attention
-        } else {
-            FocusTheme.colors.textSecondary
-        },
-    )
-}
-
-@Composable
-private fun SectionLabel(text: String, modifier: Modifier = Modifier) {
-    Text(
-        text = text,
-        style = MaterialTheme.typography.bodySmall,
-        color = FocusTheme.colors.textSecondary,
-        modifier = modifier,
-    )
-}

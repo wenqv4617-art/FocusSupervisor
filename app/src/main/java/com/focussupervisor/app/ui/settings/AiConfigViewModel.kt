@@ -36,6 +36,7 @@ import kotlin.math.roundToInt
  * @param isMessageError true 表示 [message] 是错误（显示为提醒色），false 是普通提示
  * @param dismissRequested 握手成功后置位，Sheet 据此播完收起动画再关闭
  * @param isDirty 草稿与已保存内容是否存在差异
+ * @param pickerTarget 「拉取」成功后，模型列表要填进哪个字段
  */
 data class AiConfigUiState(
     val presets: List<AiPreset> = emptyList(),
@@ -56,6 +57,7 @@ data class AiConfigUiState(
     val isMessageError: Boolean = true,
     val dismissRequested: Boolean = false,
     val isDirty: Boolean = false,
+    val pickerTarget: ModelPickerTarget = ModelPickerTarget.CONVERSATION_MODEL,
 ) {
     /** 当前选中的预设，找不到时为 null。 */
     val selectedPreset: AiPreset? get() = presets.firstOrNull { it.id == selectedPresetId }
@@ -67,6 +69,23 @@ data class AiConfigUiState(
     /** 能不能发起测试：地址与模型都填了，且没有正在进行的请求。 */
     val canTest: Boolean
         get() = draft.isUsable && !isTesting && !isFetchingModels
+
+    /**
+     * 模型选择器里高亮哪一项。
+     *
+     * 取决于这次「拉取」是为哪个字段发起的 —— 否则两个字段会同时高亮同一个模型名，
+     * 用户根本分不清点下去会填到哪里。
+     */
+    fun currentPickerValue(): String = when (pickerTarget) {
+        ModelPickerTarget.CONVERSATION_MODEL -> draft.model
+        ModelPickerTarget.EMBEDDING_MODEL -> draft.embeddingModel
+    }
+}
+
+/** 「拉取」按钮是为哪个模型字段服务的。 */
+enum class ModelPickerTarget {
+    CONVERSATION_MODEL,
+    EMBEDDING_MODEL,
 }
 
 /**
@@ -198,6 +217,18 @@ class AiConfigViewModel(application: Application) : AndroidViewModel(application
 
     fun onModelChange(value: String) = editDraft { it.copy(model = value.trim()) }
 
+    fun onEmbeddingModelChange(value: String) =
+        editDraft { it.copy(embeddingModel = value.trim()) }
+
+    /**
+     * 前置提示。
+     *
+     * 刻意**不 trim**：用户可能故意用空行开头做视觉分隔，而那几行会原样进入提示词。
+     * 只做长度截断，防止有人粘进来一整篇文档把上下文预算挤爆。
+     */
+    fun onPrePromptChange(value: String) =
+        editDraft { it.copy(prePrompt = value.take(MAX_PRE_PROMPT_LENGTH)) }
+
     /**
      * 温度滑块。
      *
@@ -220,8 +251,11 @@ class AiConfigViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun onModelPicked(model: String) {
-        editDraft { it.copy(model = model) }
-        _uiState.update { it.copy(isModelPickerVisible = false, message = null) }
+        _uiState.update {
+            it.applyPickedModel(model)
+                .copy(isModelPickerVisible = false, message = null)
+                .withRecalculatedDirty()
+        }
     }
 
     fun onMessageDismissed() {
@@ -242,7 +276,21 @@ class AiConfigViewModel(application: Application) : AndroidViewModel(application
      * 失败时把错误留在面板里（低饱和红字），**不关闭面板** —— 用户正在这里改配置，
      * 把他弹出去等于让他从头再来一遍。
      */
-    fun fetchModels() {
+    fun fetchModels() = fetchModelsFor(ModelPickerTarget.CONVERSATION_MODEL)
+
+    fun fetchEmbeddingModels() = fetchModelsFor(ModelPickerTarget.EMBEDDING_MODEL)
+
+    /**
+     * 拉取端点支持的模型列表。
+     *
+     * 失败时把错误留在面板里（低饱和红字），**不关闭面板** —— 用户正在这里改配置，
+     * 把他弹出去等于让他从头再来一遍。
+     *
+     * 两个模型字段共用这一条链路，靠 [ModelPickerTarget] 记住结果该填到哪里：
+     * 绝大多数端点把对话模型和向量模型放在同一个 `/models` 列表里，
+     * 分两条代码路径只会让它们慢慢长歪。
+     */
+    private fun fetchModelsFor(target: ModelPickerTarget) {
         val draft = _uiState.value.draft
         if (draft.baseUrl.isBlank()) {
             showMessage("请先填写 Base URL", isError = true)
@@ -251,7 +299,12 @@ class AiConfigViewModel(application: Application) : AndroidViewModel(application
 
         fetchJob?.cancel()
         _uiState.update {
-            it.copy(isFetchingModels = true, message = null, isModelPickerVisible = false)
+            it.copy(
+                isFetchingModels = true,
+                message = null,
+                isModelPickerVisible = false,
+                pickerTarget = target,
+            )
         }
 
         fetchJob = viewModelScope.launch {
@@ -269,14 +322,16 @@ class AiConfigViewModel(application: Application) : AndroidViewModel(application
                             )
 
                             // 只有一个模型时不用弹选择器，直接填上更省一步。
-                            models.size == 1 -> state.copy(
-                                isFetchingModels = false,
-                                fetchedModels = models,
-                                isModelPickerVisible = false,
-                                draft = state.draft.copy(model = models.first()),
-                                message = "已填入唯一可用模型",
-                                isMessageError = false,
-                            ).withRecalculatedDirty()
+                            models.size == 1 -> state
+                                .applyPickedModel(models.first())
+                                .copy(
+                                    isFetchingModels = false,
+                                    fetchedModels = models,
+                                    isModelPickerVisible = false,
+                                    message = "已填入唯一可用模型",
+                                    isMessageError = false,
+                                )
+                                .withRecalculatedDirty()
 
                             else -> state.copy(
                                 isFetchingModels = false,
@@ -457,6 +512,12 @@ class AiConfigViewModel(application: Application) : AndroidViewModel(application
                 isModelPickerVisible = false,
             ).withRecalculatedDirty()
         }
+    }
+
+    /** 把模型名填进当前 picker 指向的字段。纯函数，不产生副作用。 */
+    private fun AiConfigUiState.applyPickedModel(model: String): AiConfigUiState = when (pickerTarget) {
+        ModelPickerTarget.CONVERSATION_MODEL -> copy(draft = draft.copy(model = model))
+        ModelPickerTarget.EMBEDDING_MODEL -> copy(draft = draft.copy(embeddingModel = model))
     }
 
     private fun showMessage(text: String, isError: Boolean) {

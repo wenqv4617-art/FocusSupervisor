@@ -17,7 +17,9 @@ import androidx.compose.material.icons.automirrored.outlined.List
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.Face
 import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.Star
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -76,6 +78,8 @@ object ActionIds {
     const val PERMISSION_CHECK = "permission_check"
     const val FORCE_LOCK_TEST = "force_lock_test"
     const val POLICY_STATUS = "policy_status"
+    const val PERSONA_MANAGE = "persona_manage"
+    const val MEMORY_MANAGE = "memory_manage"
     const val GAZE_MONITOR = "gaze_monitor"
     const val AI_CONFIG = "ai_config"
 }
@@ -232,6 +236,16 @@ fun defaultActionItems(needsPermissionAttention: Boolean = false): List<ActionIt
         id = ActionIds.POLICY_STATUS,
         label = "待办与白名单",
         icon = Icons.AutoMirrored.Outlined.List,
+    ),
+    ActionItem(
+        id = ActionIds.PERSONA_MANAGE,
+        label = "人设管理",
+        icon = Icons.Outlined.Person,
+    ),
+    ActionItem(
+        id = ActionIds.MEMORY_MANAGE,
+        label = "记忆管理",
+        icon = Icons.Outlined.Star,
     ),
     ActionItem(
         id = ActionIds.GAZE_MONITOR,

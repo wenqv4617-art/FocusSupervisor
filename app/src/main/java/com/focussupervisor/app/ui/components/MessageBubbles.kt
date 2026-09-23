@@ -3,8 +3,10 @@ package com.focussupervisor.app.ui.components
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
@@ -18,8 +20,11 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import com.focussupervisor.app.domain.model.AiPersona
 import com.focussupervisor.app.domain.model.ChatMessage
 import com.focussupervisor.app.domain.model.MessageSender
+import com.focussupervisor.app.domain.model.PersonaPair
+import com.focussupervisor.app.domain.model.UserPersona
 import com.focussupervisor.app.ui.theme.FocusSupervisorTheme
 import com.focussupervisor.app.ui.theme.FocusTheme
 import com.focussupervisor.app.ui.util.formatMessageTime
@@ -29,18 +34,21 @@ import com.focussupervisor.app.ui.util.formatMessageTime
  *
  * 三类消息在视觉上必须一眼可分，且各自只有一种样式：
  *
- * | 类型    | 位置 | 底色        | 用途                       |
- * |---------|------|-------------|----------------------------|
- * | USER    | 靠右 | 微信绿      | 用户输入                   |
- * | AI      | 靠左 | 纯白        | AI 监管者的回复            |
- * | SYSTEM  | 居中 | 中性灰胶囊  | 系统级状态事件（非对话）   |
+ * | 类型    | 位置 | 底色        | 头像 | 姓名 |
+ * |---------|------|-------------|------|------|
+ * | USER    | 靠右 | 微信绿      | 右侧 | 气泡上方右侧 |
+ * | AI      | 靠左 | 纯白        | 左侧 | 气泡上方左侧 |
+ * | SYSTEM  | 居中 | 中性灰胶囊  | 无   | 无 |
+ *
+ * 仿微信的完整版：**头像 + 姓名 + 气泡**。系统胶囊保持无头像无姓名 ——
+ * 它不是某个人说的话，而是「系统发生了什么」，加了头像反而会让人以为是第三方。
  *
  * 这里刻意不做「气泡尾巴」（那个小三角）。微信自己在较新版本里也把尾巴做得极浅，
  * 用圆角差异（发送侧上方那只角更小）来表达方向，信息量足够而视觉更干净。
  */
 
-/** 气泡最大宽度占屏宽比例。留出 22% 的空档，让左右两侧的对话一眼能分开。 */
-private const val BUBBLE_MAX_WIDTH_FRACTION = 0.78f
+/** 气泡最大宽度占屏宽比例。留出空档，让左右两侧的对话一眼能分开。 */
+private const val BUBBLE_MAX_WIDTH_FRACTION = 0.68f
 
 /** 系统胶囊最大宽度占屏宽比例。比气泡窄，进一步弱化它的存在感。 */
 private const val PILL_MAX_WIDTH_FRACTION = 0.84f
@@ -48,6 +56,9 @@ private const val PILL_MAX_WIDTH_FRACTION = 0.84f
 /** 气泡内边距。 */
 private val BubbleHorizontalPadding = 12.dp
 private val BubbleVerticalPadding = 9.dp
+
+/** 头像与气泡之间的间距。 */
+private val AvatarGap = 10.dp
 
 /** 气泡圆角：常规角 14dp，指向发送方的那只角压到 4dp。 */
 private val UserBubbleShape = RoundedCornerShape(
@@ -67,23 +78,35 @@ private val AiBubbleShape = RoundedCornerShape(
 /**
  * 消息分发入口：按 [MessageSender] 选择具体的渲染方式。
  *
- * 调用方（LazyColumn）只需要认识这一个函数，新增消息类型时改动被限制在本文件内。
+ * @param personas 会话双方的人设。每条消息都要用它取头像与姓名，
+ *        所以打包成一个值往下传，而不是拆成两个参数。
  */
 @Composable
 fun MessageBubble(
     message: ChatMessage,
+    personas: PersonaPair,
     modifier: Modifier = Modifier,
 ) {
     when (message.sender) {
-        MessageSender.USER -> UserMessageBubble(
+        MessageSender.USER -> ChatBubble(
             text = message.text,
             timestampMillis = message.timestampMillis,
+            senderName = personas.user.name,
+            avatarPath = personas.user.avatarPath,
+            isFromUser = true,
+            containerColor = FocusTheme.colors.bubbleUser,
+            shape = UserBubbleShape,
             modifier = modifier,
         )
 
-        MessageSender.AI -> AiMessageBubble(
+        MessageSender.AI -> ChatBubble(
             text = message.text,
             timestampMillis = message.timestampMillis,
+            senderName = personas.ai.name,
+            avatarPath = personas.ai.avatarPath,
+            isFromUser = false,
+            containerColor = FocusTheme.colors.bubbleAi,
+            shape = AiBubbleShape,
             modifier = modifier,
         )
 
@@ -95,57 +118,18 @@ fun MessageBubble(
 }
 
 /**
- * 用户气泡：靠右、微信绿、深色正文。
+ * 一条带头像与姓名的对话气泡。
  *
- * 实现在 [ChatBubble] 里，这一层只负责给出「靠右 + 绿色 + 右上角小圆角」这组参数。
- */
-@Composable
-fun UserMessageBubble(
-    text: String,
-    timestampMillis: Long,
-    modifier: Modifier = Modifier,
-) {
-    ChatBubble(
-        text = text,
-        timestampMillis = timestampMillis,
-        isFromUser = true,
-        containerColor = FocusTheme.colors.bubbleUser,
-        shape = UserBubbleShape,
-        modifier = modifier,
-    )
-}
-
-/**
- * AI 气泡：靠左、纯白、深色正文。
- */
-@Composable
-fun AiMessageBubble(
-    text: String,
-    timestampMillis: Long,
-    modifier: Modifier = Modifier,
-) {
-    ChatBubble(
-        text = text,
-        timestampMillis = timestampMillis,
-        isFromUser = false,
-        containerColor = FocusTheme.colors.bubbleAi,
-        shape = AiBubbleShape,
-        modifier = modifier,
-    )
-}
-
-/**
- * 气泡的公共实现。
- *
- * 宽度控制是这里唯一的技巧：外层 Row 撑满，内层 Column 先被 [fillMaxWidth] 撑到
- * 78% 宽，再用 [wrapContentWidth] 把内容重新按自身尺寸对齐到该区域的一侧。
- * 这样短消息不会被迫拉成一条长条，长消息又不会顶满整屏 —— 不需要
- * BoxWithConstraints 那套子组合开销。
+ * 布局是「头像 + 一列（姓名 / 气泡 / 时间 / 系统指令说明）」，
+ * 靠 [RowScope] 的方向控制左右镜像 —— 用同一套代码渲染两边，
+ * 保证左右气泡的内边距、圆角、字号永远一致（分成两个函数迟早会漂移）。
  */
 @Composable
 private fun ChatBubble(
     text: String,
     timestampMillis: Long,
+    senderName: String,
+    avatarPath: String?,
     isFromUser: Boolean,
     containerColor: Color,
     shape: Shape,
@@ -153,18 +137,35 @@ private fun ChatBubble(
 ) {
     val horizontalAlignment = if (isFromUser) Alignment.End else Alignment.Start
 
-    Column(
+    Row(
         modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp),
-        horizontalAlignment = horizontalAlignment,
+        horizontalArrangement = if (isFromUser) Arrangement.End else Arrangement.Start,
     ) {
+        // 靠左时头像在前 —— 用两个 if 而不是让 Row 反排，是为了让「头像始终贴着屏幕
+        // 外侧」这条规则在代码里就是字面意思，不需要读者在脑子里做一次镜像。
+        if (!isFromUser) {
+            Avatar(path = avatarPath, name = senderName)
+            Box(modifier = Modifier.width(AvatarGap))
+        }
+
         Column(
             modifier = Modifier
                 .fillMaxWidth(BUBBLE_MAX_WIDTH_FRACTION)
                 .wrapContentWidth(horizontalAlignment),
             horizontalAlignment = horizontalAlignment,
         ) {
+            // 姓名。微信在单聊里不显示，但这里必须显示 —— 名字是用户自己设的，
+            // 而且他随时可能改，让它在每条消息上方可见才能立刻确认改对了没有。
+            Text(
+                text = senderName,
+                style = MaterialTheme.typography.labelSmall,
+                color = FocusTheme.colors.textSecondary,
+                maxLines = 1,
+                modifier = Modifier.padding(start = 2.dp, end = 2.dp, bottom = 4.dp),
+            )
+
             Surface(
                 color = containerColor,
                 shape = shape,
@@ -191,20 +192,25 @@ private fun ChatBubble(
                 modifier = Modifier.padding(top = 3.dp, start = 2.dp, end = 2.dp),
             )
         }
+
+        if (isFromUser) {
+            Box(modifier = Modifier.width(AvatarGap))
+            Avatar(path = avatarPath, name = senderName)
+        }
     }
 }
 
 /**
  * 系统消息胶囊（System Message Pill）。
  *
- * 用于「[系统] 监测到进入：小红书」「[系统] 已开启屏幕视线感知」这类不是对话、
+ * 用于「[系统] 监测到进入：小红书」「[系统] AI 已放行 微信 · 10 分钟」这类不是对话、
  * 但用户必须知道的状态变动。
  *
  * 设计要点：
  * - 居中，不参与左右对话的视线流动，天然被读成「旁白」；
  * - 中性灰底 + 中灰字，对比度刻意低于正文，做到存在但不抢戏；
  * - 全圆角（50% → 胶囊形），与方中带圆的对话气泡形成形状语言的区分；
- * - 不显示时间戳：系统事件的价值在内容，加上时间只会让它更像一条消息。
+ * - 无头像、无姓名、无时间戳 —— 它不代表任何人说话。
  */
 @Composable
 fun SystemMessagePill(
@@ -241,27 +247,42 @@ fun SystemMessagePill(
 }
 
 // ---------------------------------------------------------------------------
-// 预览：只用于开发期在 Android Studio 里核对观感，不进正式包。
+// 预览
 // ---------------------------------------------------------------------------
 
 @Preview(name = "三类消息", showBackground = true, backgroundColor = 0xFFEDEDED)
 @Composable
 private fun MessageBubblesPreview() {
+    val personas = PersonaPair(
+        ai = AiPersona(name = "守夜人", description = ""),
+        user = UserPersona(name = "阿澈"),
+    )
+
     FocusSupervisorTheme {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             SystemMessagePill(text = "[系统] 已开启屏幕视线感知")
-            AiMessageBubble(
-                text = "接下来我会盯着你。想清楚再打开那些 App。",
-                timestampMillis = 1_758_600_000_000,
+            MessageBubble(
+                message = ChatMessage(
+                    id = "a",
+                    sender = MessageSender.AI,
+                    text = "接下来我会盯着你。想清楚再打开那些 App。",
+                    timestampMillis = 1_758_600_000_000,
+                ),
+                personas = personas,
             )
-            UserMessageBubble(
-                text = "知道了，先写完这一节。",
-                timestampMillis = 1_758_600_060_000,
+            MessageBubble(
+                message = ChatMessage(
+                    id = "u",
+                    sender = MessageSender.USER,
+                    text = "知道了，先写完这一节。",
+                    timestampMillis = 1_758_600_060_000,
+                ),
+                personas = personas,
             )
         }
     }
