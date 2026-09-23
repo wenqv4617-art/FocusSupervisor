@@ -1,6 +1,7 @@
 package com.focussupervisor.app.core.network
 
 import com.focussupervisor.app.domain.model.AiConfig
+import com.focussupervisor.app.domain.model.EmbeddingConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.withContext
@@ -211,12 +212,12 @@ class OpenAiCompatibleClient(
      *
      * @return 与 [texts] 一一对应的向量列表，顺序必须一致
      */
-    suspend fun embed(config: AiConfig, texts: List<String>): Result<List<List<Float>>> {
+    suspend fun embed(config: EmbeddingConfig, texts: List<String>): Result<List<List<Float>>> {
         if (texts.isEmpty()) return Result.success(emptyList())
 
-        val model = config.embeddingModel.trim()
+        val model = config.model.trim()
         if (model.isEmpty()) {
-            return Result.failure(AiClientException("没有配置向量模型"))
+            return Result.failure(AiClientException("还没有配置向量模型（「+」→「向量模型」）"))
         }
 
         val roots = candidateRoots(config.baseUrl)

@@ -13,6 +13,7 @@ import androidx.datastore.preferences.preferencesDataStore
 import com.focussupervisor.app.domain.model.AiPersona
 import com.focussupervisor.app.domain.model.AiPreset
 import com.focussupervisor.app.domain.model.ChatMessage
+import com.focussupervisor.app.domain.model.EmbeddingConfig
 import com.focussupervisor.app.domain.model.IndexedDocument
 import com.focussupervisor.app.domain.model.MemoryDefaults
 import com.focussupervisor.app.domain.model.MemoryEntry
@@ -202,6 +203,16 @@ class AppPreferencesDataSource(context: Context) {
     }
 
     // -----------------------------------------------------------------------
+    // 向量模型配置（与对话配置完全独立的一份）
+    // -----------------------------------------------------------------------
+
+    suspend fun updateEmbeddingConfig(config: EmbeddingConfig) {
+        dataStore.edit { prefs ->
+            prefs[KEY_EMBEDDING_CONFIG] = PreferencesCodec.encodeEmbeddingConfig(config)
+        }
+    }
+
+    // -----------------------------------------------------------------------
     // 人设
     // -----------------------------------------------------------------------
 
@@ -268,6 +279,26 @@ class AppPreferencesDataSource(context: Context) {
     // 对话
     // -----------------------------------------------------------------------
 
+    /** 改写某条消息的正文。长按消息 -> 编辑。 */
+    suspend fun updateMessageText(id: String, text: String) {
+        dataStore.edit { prefs ->
+            val current = PreferencesCodec.decodeMessages(prefs[KEY_MESSAGES])
+            prefs[KEY_MESSAGES] = PreferencesCodec.encodeMessages(
+                current.map { if (it.id == id) it.copy(text = text) else it },
+            )
+        }
+    }
+
+    /** 删除某条消息。长按消息 -> 删除。 */
+    suspend fun removeMessage(id: String) {
+        dataStore.edit { prefs ->
+            val current = PreferencesCodec.decodeMessages(prefs[KEY_MESSAGES])
+            prefs[KEY_MESSAGES] = PreferencesCodec.encodeMessages(
+                current.filterNot { it.id == id },
+            )
+        }
+    }
+
     suspend fun appendMessage(message: ChatMessage) {
         dataStore.edit { prefs ->
             val current = PreferencesCodec.decodeMessages(prefs[KEY_MESSAGES])
@@ -294,6 +325,7 @@ class AppPreferencesDataSource(context: Context) {
         todos = PreferencesCodec.decodeTodos(this[KEY_TODOS]),
         presets = PreferencesCodec.decodePresets(this[KEY_AI_PRESETS]),
         selectedPresetId = this[KEY_AI_SELECTED_PRESET].orEmpty(),
+        embeddingConfig = PreferencesCodec.decodeEmbeddingConfig(this[KEY_EMBEDDING_CONFIG]),
         aiPersona = PreferencesCodec.decodeAiPersona(this[KEY_AI_PERSONA]),
         userPersona = PreferencesCodec.decodeUserPersona(this[KEY_USER_PERSONA]),
         memories = PreferencesCodec.decodeMemories(this[KEY_MEMORIES]),
@@ -335,6 +367,7 @@ class AppPreferencesDataSource(context: Context) {
         private val KEY_TODOS = stringPreferencesKey("todos_json")
         private val KEY_AI_PRESETS = stringPreferencesKey("ai_presets_json")
         private val KEY_AI_SELECTED_PRESET = stringPreferencesKey("ai_selected_preset_id")
+        private val KEY_EMBEDDING_CONFIG = stringPreferencesKey("embedding_config_json")
         private val KEY_AI_PERSONA = stringPreferencesKey("ai_persona_json")
         private val KEY_USER_PERSONA = stringPreferencesKey("user_persona_json")
         private val KEY_MEMORIES = stringPreferencesKey("memories_json")
@@ -359,6 +392,7 @@ data class AppPreferences(
     val todos: List<TodoItem> = emptyList(),
     val presets: List<AiPreset> = emptyList(),
     val selectedPresetId: String = "",
+    val embeddingConfig: EmbeddingConfig = EmbeddingConfig(),
     val aiPersona: AiPersona = AiPersona(),
     val userPersona: UserPersona = UserPersona(),
     val memories: List<MemoryEntry> = emptyList(),

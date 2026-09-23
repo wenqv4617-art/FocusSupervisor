@@ -14,6 +14,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.List
+import androidx.compose.material.icons.outlined.Build
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.Face
 import androidx.compose.material.icons.outlined.Lock
@@ -80,6 +81,7 @@ object ActionIds {
     const val POLICY_STATUS = "policy_status"
     const val PERSONA_MANAGE = "persona_manage"
     const val MEMORY_MANAGE = "memory_manage"
+    const val EMBEDDING_CONFIG = "embedding_config"
     const val GAZE_MONITOR = "gaze_monitor"
     const val AI_CONFIG = "ai_config"
 }
@@ -246,6 +248,11 @@ fun defaultActionItems(needsPermissionAttention: Boolean = false): List<ActionIt
         id = ActionIds.MEMORY_MANAGE,
         label = "记忆管理",
         icon = Icons.Outlined.Star,
+    ),
+    ActionItem(
+        id = ActionIds.EMBEDDING_CONFIG,
+        label = "向量模型",
+        icon = Icons.Outlined.Build,
     ),
     ActionItem(
         id = ActionIds.GAZE_MONITOR,

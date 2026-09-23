@@ -5,7 +5,6 @@ import com.focussupervisor.app.domain.model.AiCommandLimits
 import com.focussupervisor.app.domain.model.AiPersona
 import com.focussupervisor.app.domain.model.ChatMessage
 import com.focussupervisor.app.domain.model.MemoryEntry
-import com.focussupervisor.app.domain.model.MemoryTier
 import com.focussupervisor.app.domain.model.MessageSender
 import com.focussupervisor.app.domain.model.PersonaPair
 import com.focussupervisor.app.domain.model.TodoItem

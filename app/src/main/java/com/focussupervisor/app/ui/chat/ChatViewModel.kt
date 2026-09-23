@@ -156,6 +156,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
             ActionIds.MEMORY_MANAGE -> openSheet(SheetTarget.MEMORY)
 
+            ActionIds.EMBEDDING_CONFIG -> openSheet(SheetTarget.EMBEDDING_CONFIG)
+
             ActionIds.AI_CONFIG -> openSheet(SheetTarget.AI_CONFIG)
 
             else -> {
@@ -174,6 +176,77 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     fun onPersonaSheetDismiss() = closeSheet(SheetTarget.PERSONA)
 
     fun onMemorySheetDismiss() = closeSheet(SheetTarget.MEMORY)
+
+    fun onEmbeddingSheetDismiss() = closeSheet(SheetTarget.EMBEDDING_CONFIG)
+
+    // -----------------------------------------------------------------------
+    // 消息长按操作
+    // -----------------------------------------------------------------------
+
+    /**
+     * 长按一条消息，弹出操作面板。
+     *
+     * 三类消息（自己的 / AI 的 / 系统胶囊）都支持删除与编辑 —— 需求里明确要求
+     * 「所有消息」。系统胶囊虽然没有人称，但它也是一条记录，用户同样可能想清掉
+     * 一条误报，或者改掉一条措辞不合适的播报。
+     */
+    fun onMessageLongPress(message: ChatMessage) {
+        _uiState.update { it.copy(messageActionTarget = message) }
+    }
+
+    fun onMessageActionDismiss() {
+        _uiState.update { it.copy(messageActionTarget = null) }
+    }
+
+    /** 从操作面板进入编辑。把目标从「操作」挪到「编辑」，避免两个面板同时存在。 */
+    fun onMessageEditRequested() {
+        _uiState.update {
+            it.copy(messageEditTarget = it.messageActionTarget, messageActionTarget = null)
+        }
+    }
+
+    /** 从操作面板进入删除确认。 */
+    fun onMessageDeleteRequested() {
+        _uiState.update {
+            it.copy(messageDeleteTarget = it.messageActionTarget, messageActionTarget = null)
+        }
+    }
+
+    fun onMessageEditDismiss() {
+        _uiState.update { it.copy(messageEditTarget = null) }
+    }
+
+    fun onMessageDeleteDismiss() {
+        _uiState.update { it.copy(messageDeleteTarget = null) }
+    }
+
+    /** 提交编辑。空白内容直接忽略 —— 那等同于删除，但用户没这么选，不该替他决定。 */
+    fun onMessageEditSubmit(text: String) {
+        val target = _uiState.value.messageEditTarget ?: return
+        val trimmed = text.trim()
+        if (trimmed.isEmpty() || trimmed == target.text) {
+            _uiState.update { it.copy(messageEditTarget = null) }
+            return
+        }
+
+        _uiState.update { it.copy(messageEditTarget = null) }
+        viewModelScope.launch {
+            if (!conversation.updateText(target.id, trimmed)) {
+                policy.publishNotice("编辑消息失败")
+            }
+        }
+    }
+
+    /** 确认删除。 */
+    fun onMessageDeleteConfirm() {
+        val target = _uiState.value.messageDeleteTarget ?: return
+        _uiState.update { it.copy(messageDeleteTarget = null) }
+        viewModelScope.launch {
+            if (!conversation.delete(target.id)) {
+                policy.publishNotice("删除消息失败")
+            }
+        }
+    }
 
     /**
      * 跳转到某项权限的系统设置页。
@@ -343,7 +416,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     // -----------------------------------------------------------------------
 
     /** 三个 BottomSheet 的标识。 */
-    private enum class SheetTarget { AI_CONFIG, PERSONA, MEMORY }
+    private enum class SheetTarget { AI_CONFIG, PERSONA, MEMORY, EMBEDDING_CONFIG }
 
     private fun openDialog(dialog: ChatDialog) {
         _uiState.update {
@@ -364,6 +437,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 isAiConfigSheetVisible = target == SheetTarget.AI_CONFIG,
                 isPersonaSheetVisible = target == SheetTarget.PERSONA,
                 isMemorySheetVisible = target == SheetTarget.MEMORY,
+                isEmbeddingSheetVisible = target == SheetTarget.EMBEDDING_CONFIG,
             )
         }
     }
@@ -374,6 +448,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 SheetTarget.AI_CONFIG -> it.copy(isAiConfigSheetVisible = false)
                 SheetTarget.PERSONA -> it.copy(isPersonaSheetVisible = false)
                 SheetTarget.MEMORY -> it.copy(isMemorySheetVisible = false)
+                SheetTarget.EMBEDDING_CONFIG -> it.copy(isEmbeddingSheetVisible = false)
             }
         }
     }

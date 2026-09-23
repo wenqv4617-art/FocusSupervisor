@@ -1,10 +1,13 @@
 package com.focussupervisor.app.ui.settings
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -48,11 +51,12 @@ internal val SheetBottomPadding = 24.dp
  * 面板主标题。
  */
 @Composable
-internal fun SheetTitle(text: String) {
+internal fun SheetTitle(text: String, modifier: Modifier = Modifier) {
     Text(
         text = text,
         style = MaterialTheme.typography.titleMedium,
         color = FocusTheme.colors.textPrimary,
+        modifier = modifier,
     )
 }
 
@@ -228,6 +232,114 @@ internal fun SheetPrimaryButton(
             text = text,
             style = MaterialTheme.typography.bodyMedium,
             modifier = Modifier.padding(vertical = 4.dp),
+        )
+    }
+}
+
+/**
+ * 次级操作按钮：有边框、无填充。
+ *
+ * 和 [SheetPrimaryButton] 并排时用它，让「哪个是主操作」一眼可辨 ——
+ * 两个实心按钮并排，用户每次都得读一遍文字才知道该点哪个。
+ */
+@Composable
+internal fun SheetSecondaryButton(
+    text: String,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Button(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(8.dp),
+        border = BorderStroke(1.dp, FocusTheme.colors.hairline),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = FocusTheme.colors.inputField,
+            contentColor = FocusTheme.colors.textPrimary,
+            disabledContainerColor = FocusTheme.colors.inputField,
+            disabledContentColor = FocusTheme.colors.textSecondary,
+        ),
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.padding(vertical = 4.dp),
+        )
+    }
+}
+
+/**
+ * 分组卡片。
+ *
+ * 这是面板「看不看得清」的关键。上一版把所有字段平铺在一列里，靠 16dp 间距区分
+ * 分组 —— 结果是一屏十几个输入框，眼睛找不到边界，用户不知道哪几个是一伙的。
+ *
+ * 现在每个分组是一块白底圆角块 + 0.5dp 发丝边框，标题压在块外左上角。
+ * 白底与 chromeBackground 的明度差足够划出边界，又不需要投影或第二强调色。
+ */
+@Composable
+internal fun SheetSection(
+    title: String,
+    modifier: Modifier = Modifier,
+    subtitle: String? = null,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        SheetSectionLabel(text = title)
+        if (subtitle != null) {
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = FocusTheme.colors.textSecondary,
+            )
+        }
+
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(10.dp))
+                .background(FocusTheme.colors.inputField)
+                .border(
+                    width = 0.5.dp,
+                    color = FocusTheme.colors.hairline,
+                    shape = RoundedCornerShape(10.dp),
+                )
+                .padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            content = content,
+        )
+    }
+}
+
+/**
+ * 一枚层级徽章。用于记忆列表，让人一眼看出这条在哪一层。
+ *
+ * 三种层级只用**明度**区分，不用三种颜色：这个应用的调色板里只有绿和红两个有含义
+ * 的颜色，拿它们去标「核心/长久/短期」会把「需要处理」这个信号稀释掉。
+ */
+@Composable
+internal fun TierBadge(text: String, emphasized: Boolean) {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(percent = 50))
+            .background(
+                if (emphasized) {
+                    FocusTheme.colors.accent.copy(alpha = 0.14f)
+                } else {
+                    FocusTheme.colors.chatBackground
+                },
+            )
+            .padding(horizontal = 8.dp, vertical = 3.dp),
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelSmall,
+            color = if (emphasized) FocusTheme.colors.accent else FocusTheme.colors.textSecondary,
         )
     }
 }

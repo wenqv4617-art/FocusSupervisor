@@ -5,6 +5,7 @@ import com.focussupervisor.app.data.datastore.AppPreferencesDataSource
 import com.focussupervisor.app.domain.model.AiConfig
 import com.focussupervisor.app.domain.model.AiPreset
 import com.focussupervisor.app.domain.model.AiPresetDefaults
+import com.focussupervisor.app.domain.model.EmbeddingConfig
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -46,6 +47,17 @@ interface AiConfigRepository {
 
     /** 同步取当前配置。给不方便收集 Flow 的地方（例如日志、状态摘要）用。 */
     fun activeConfigNow(): AiConfig
+
+    /**
+     * 向量模型配置。**与对话配置完全独立**，理由见 [EmbeddingConfig] 的注释。
+     */
+    val embeddingConfig: StateFlow<EmbeddingConfig>
+
+    /** 同步取向量配置。 */
+    fun embeddingConfigNow(): EmbeddingConfig
+
+    /** 保存向量模型配置。@return 是否写入成功。 */
+    suspend fun saveEmbeddingConfig(config: EmbeddingConfig): Boolean
 
     /** 插入或覆盖一个预设。@return 是否写入成功。 */
     suspend fun savePreset(preset: AiPreset): Boolean
@@ -101,16 +113,25 @@ class DataStoreAiConfigRepository(
             initialValue = EMPTY_CONFIG,
         )
 
+    private val _embeddingConfig = MutableStateFlow(EmbeddingConfig())
+    override val embeddingConfig: StateFlow<EmbeddingConfig> = _embeddingConfig.asStateFlow()
+
     init {
         scope.launch {
             preferences.preferences.collect { prefs ->
                 _presets.value = prefs.presets
                 _selectedPresetId.value = prefs.selectedPresetId
+                _embeddingConfig.value = prefs.embeddingConfig
             }
         }
     }
 
     override fun activeConfigNow(): AiConfig = activeConfig.value
+
+    override fun embeddingConfigNow(): EmbeddingConfig = _embeddingConfig.value
+
+    override suspend fun saveEmbeddingConfig(config: EmbeddingConfig): Boolean =
+        writeOrLog("保存向量模型配置") { preferences.updateEmbeddingConfig(config) }
 
     override suspend fun savePreset(preset: AiPreset): Boolean =
         writeOrLog("保存预设") { preferences.upsertPreset(preset) }

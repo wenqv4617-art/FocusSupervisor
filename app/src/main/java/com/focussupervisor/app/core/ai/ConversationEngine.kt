@@ -81,7 +81,9 @@ class ConversationEngine(
      * 记忆仓库会安静地退回关键词召回 —— 不需要在这里做任何判断。
      */
     private val embedder = TextEmbedder { texts ->
-        client.embed(aiConfig.activeConfigNow(), texts)
+        // 向量走**独立的**配置，不复用对话端点 —— 现实中这两件事经常不在一家
+        // （DeepSeek 没有公开的 embeddings 接口；中转站往往只代理对话模型）。
+        client.embed(aiConfig.embeddingConfigNow(), texts)
     }
 
     /**
@@ -112,8 +114,9 @@ class ConversationEngine(
             }
 
             // ---- 3. 召回记忆 ----
-            val queryEmbedding = if (config.embeddingModel.isNotBlank()) {
-                client.embed(config, listOf(text)).getOrNull()?.firstOrNull()
+            val embeddingConfig = aiConfig.embeddingConfigNow()
+            val queryEmbedding = if (embeddingConfig.isUsable) {
+                client.embed(embeddingConfig, listOf(text)).getOrNull()?.firstOrNull()
             } else {
                 null
             }
@@ -175,7 +178,7 @@ class ConversationEngine(
         } catch (t: Throwable) {
             // 走到这里说明有个我们没预料到的异常。它绝不能冒到界面上变成崩溃。
             Log.e(TAG, "对话链路异常", t)
-            return fail("处理消息时出错：${t.message ?: t.javaClass.simpleName}")
+            return fail(describeUnexpected(t))
         }
     }
 
@@ -311,6 +314,32 @@ class ConversationEngine(
     private fun fail(message: String): SendOutcome.Failed {
         policy.publishNotice("对话失败：$message")
         return SendOutcome.Failed(message)
+    }
+
+    /**
+     * 把没预料到的异常翻译成一条**能直接定位问题**的说明。
+     *
+     * 普通异常只要 message 就够了。但像 `ExceptionInInitializerError` 这种
+     * 「类初始化失败」，它自己的 message 是 null —— 真正的信息全在 cause 和栈里。
+     * 如果只显示类名，用户看到的是一句毫无线索的话，而我们拿不到任何可查的东西。
+     * 所以这里额外带上 cause 与最上面两帧调用点。
+     */
+    private fun describeUnexpected(t: Throwable): String {
+        val head = buildString {
+            append(t.javaClass.simpleName)
+            t.message?.takeIf { it.isNotBlank() }?.let { append("：").append(it) }
+            t.cause?.let { cause ->
+                append(" ← ").append(cause.javaClass.simpleName)
+                cause.message?.takeIf { it.isNotBlank() }?.let { append("：").append(it.take(160)) }
+            }
+        }
+
+        val frames = t.stackTrace
+            .filter { it.className.startsWith("com.focussupervisor") }
+            .take(2)
+            .joinToString(" | ") { "${it.fileName}:${it.lineNumber} ${it.methodName}" }
+
+        return if (frames.isBlank()) head else "$head\n$frames"
     }
 
     private fun newId(sender: MessageSender) = "${sender.name.lowercase()}-${UUID.randomUUID()}"

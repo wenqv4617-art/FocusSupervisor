@@ -30,6 +30,12 @@ interface ConversationRepository {
     /** 追加一条消息。 */
     suspend fun append(message: ChatMessage): Boolean
 
+    /** 改写某条消息的正文（长按 → 编辑）。 */
+    suspend fun updateText(id: String, text: String): Boolean
+
+    /** 删除某条消息（长按 → 删除）。 */
+    suspend fun delete(id: String): Boolean
+
     /** 清空会话。用户主动「重新开始」时用；记忆不受影响。 */
     suspend fun clear(): Boolean
 }
@@ -60,6 +66,26 @@ class DataStoreConversationRepository(
         throw e
     } catch (t: Throwable) {
         Log.e(TAG, "保存消息失败", t)
+        false
+    }
+
+    override suspend fun updateText(id: String, text: String): Boolean = try {
+        preferences.updateMessageText(id, text)
+        true
+    } catch (e: CancellationException) {
+        throw e
+    } catch (t: Throwable) {
+        Log.e(TAG, "改写消息失败", t)
+        false
+    }
+
+    override suspend fun delete(id: String): Boolean = try {
+        preferences.removeMessage(id)
+        true
+    } catch (e: CancellationException) {
+        throw e
+    } catch (t: Throwable) {
+        Log.e(TAG, "删除消息失败", t)
         false
     }
 

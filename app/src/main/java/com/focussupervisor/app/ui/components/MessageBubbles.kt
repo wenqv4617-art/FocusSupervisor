@@ -1,5 +1,7 @@
 package com.focussupervisor.app.ui.components
 
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -85,12 +87,14 @@ private val AiBubbleShape = RoundedCornerShape(
 fun MessageBubble(
     message: ChatMessage,
     personas: PersonaPair,
+    onLongPress: (ChatMessage) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     when (message.sender) {
         MessageSender.USER -> ChatBubble(
             text = message.text,
             timestampMillis = message.timestampMillis,
+            onLongPress = { onLongPress(message)},
             senderName = personas.user.name,
             avatarPath = personas.user.avatarPath,
             isFromUser = true,
@@ -102,6 +106,7 @@ fun MessageBubble(
         MessageSender.AI -> ChatBubble(
             text = message.text,
             timestampMillis = message.timestampMillis,
+            onLongPress = { onLongPress(message)},
             senderName = personas.ai.name,
             avatarPath = personas.ai.avatarPath,
             isFromUser = false,
@@ -112,6 +117,7 @@ fun MessageBubble(
 
         MessageSender.SYSTEM -> SystemMessagePill(
             text = message.text,
+            onLongPress = { onLongPress(message) },
             modifier = modifier,
         )
     }
@@ -125,9 +131,11 @@ fun MessageBubble(
  * 保证左右气泡的内边距、圆角、字号永远一致（分成两个函数迟早会漂移）。
  */
 @Composable
+@OptIn(ExperimentalFoundationApi::class)
 private fun ChatBubble(
     text: String,
     timestampMillis: Long,
+    onLongPress: () -> Unit,
     senderName: String,
     avatarPath: String?,
     isFromUser: Boolean,
@@ -172,6 +180,13 @@ private fun ChatBubble(
                 // 刻意不用阴影：灰色背景上的一点阴影会显脏，气泡靠底色区分已经足够。
                 shadowElevation = 0.dp,
                 tonalElevation = 0.dp,
+                // 长按气泡弹出操作面板（编辑 / 删除）。
+                // 用 combinedClickable 而不是普通 clickable：聊天消息点一下不该有反应，
+                // 只有长按才是「我要对这条消息做点什么」。
+                modifier = Modifier.combinedClickable(
+                    onClick = {},
+                    onLongClick = onLongPress,
+                ),
             ) {
                 Text(
                     text = text,
@@ -212,9 +227,11 @@ private fun ChatBubble(
  * - 全圆角（50% → 胶囊形），与方中带圆的对话气泡形成形状语言的区分；
  * - 无头像、无姓名、无时间戳 —— 它不代表任何人说话。
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun SystemMessagePill(
     text: String,
+    onLongPress: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     Box(
@@ -233,7 +250,8 @@ fun SystemMessagePill(
                 // 自身文字宽度贴合、并在这 84% 里居中。少了后半句，短句也会被
                 // 拉成一条几乎满屏的横条。
                 .fillMaxWidth(PILL_MAX_WIDTH_FRACTION)
-                .wrapContentWidth(Alignment.CenterHorizontally),
+                .wrapContentWidth(Alignment.CenterHorizontally)
+                .combinedClickable(onClick = {}, onLongClick = onLongPress),
         ) {
             Text(
                 text = text,
@@ -274,6 +292,7 @@ private fun MessageBubblesPreview() {
                     timestampMillis = 1_758_600_000_000,
                 ),
                 personas = personas,
+                onLongPress = {},
             )
             MessageBubble(
                 message = ChatMessage(
@@ -283,6 +302,7 @@ private fun MessageBubblesPreview() {
                     timestampMillis = 1_758_600_060_000,
                 ),
                 personas = personas,
+                onLongPress = {},
             )
         }
     }

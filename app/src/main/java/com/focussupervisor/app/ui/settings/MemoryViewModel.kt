@@ -158,8 +158,8 @@ class MemoryViewModel(application: Application) : AndroidViewModel(application) 
                     isEmbedding = false,
                     message = when {
                         count > 0 -> "已向量化 $count 条"
-                        container.aiConfig.activeConfigNow().embeddingModel.isBlank() ->
-                            "还没配置向量模型，当前靠关键词匹配召回"
+                        !container.aiConfig.embeddingConfigNow().isUsable ->
+                            "还没配置向量模型（「+」→「向量模型」），当前靠关键词匹配召回"
 
                         else -> "没有待向量化的内容"
                     },

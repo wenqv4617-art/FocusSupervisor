@@ -23,9 +23,6 @@ package com.focussupervisor.app.domain.model
  * @param model 模型 id，例如 `deepseek-chat`、`qwen2.5:7b`。
  * @param temperature 采样温度。允许 0.0 ~ 1.5：比常见 SDK 的 0~2 上限更窄，
  *        因为监督场景不需要更强的发散，而超过 1.5 之后模型的输出质量会明显下滑。
- * @param embeddingModel 向量模型名，用于记忆检索。留空表示不做向量索引，
- *        记忆会退回到关键词打分（见 `MemoryRepository`）。它和对话模型共用同一套
- *        baseUrl / apiKey，因为绝大多数端点把两者放在同一个 `/v1` 下。
  * @param prePrompt 前置提示。**在所有其它内容之前注入**，位置比人设、记忆、
  *        待办都靠前。留空表示不注入。
  *        它的定位是「用户自己写的一段全局设定」：语气风格、角色扮演的前置条件、
@@ -37,7 +34,6 @@ data class AiConfig(
     val apiKey: String,
     val model: String,
     val temperature: Float,
-    val embeddingModel: String = "",
     val prePrompt: String = "",
 ) {
     /** 是否已经填够了发起请求所需的最小信息。 */
@@ -108,8 +104,6 @@ object AiPresetDefaults {
                 apiKey = "",
                 model = "deepseek-chat",
                 temperature = AiConfig.DEFAULT_TEMPERATURE,
-                // DeepSeek 目前没有公开的 embeddings 接口，留空即走关键词召回。
-                embeddingModel = "",
             ),
         ),
         AiPreset(
@@ -120,7 +114,6 @@ object AiPresetDefaults {
                 apiKey = "",
                 model = "qwen2.5:7b",
                 temperature = AiConfig.DEFAULT_TEMPERATURE,
-                embeddingModel = "nomic-embed-text",
             ),
         ),
         AiPreset(
@@ -131,7 +124,6 @@ object AiPresetDefaults {
                 apiKey = "",
                 model = "gpt-4o-mini",
                 temperature = AiConfig.DEFAULT_TEMPERATURE,
-                embeddingModel = "text-embedding-3-small",
             ),
         ),
     )
@@ -148,7 +140,6 @@ object AiPresetDefaults {
             apiKey = "",
             model = "",
             temperature = AiConfig.DEFAULT_TEMPERATURE,
-            embeddingModel = "",
         ),
     )
 
@@ -158,4 +149,43 @@ object AiPresetDefaults {
      * 用途：内置预置不允许删除 —— 删掉之后用户就没有可以「恢复默认」的锚点了。
      */
     val BUILT_IN_IDS: Set<String> = setOf(ID_DEEPSEEK, ID_OLLAMA, ID_OPENAI)
+}
+
+/**
+ * 向量模型配置。**与对话配置完全独立。**
+ *
+ * ===========================================================================
+ * 为什么要拆开
+ * ===========================================================================
+ * 合在一份配置里看起来省事，但现实是这两件事经常不在一家：
+ *  - DeepSeek 没有公开的 embeddings 接口，用户只能在别处（OpenAI、硅基流动、
+ *    本地 Ollama）单独配一个向量服务；
+ *  - 中转站往往只代理对话模型，不代理 embeddings。
+ *
+ * 硬塞进同一份配置的后果是：用户为了让记忆用上向量，不得不把对话模型也切到
+ * 那家能提供 embeddings 的服务上 —— 这不是他能接受的取舍。
+ *
+ * 所以它是独立的一份配置、独立的入口、独立的页面。唯一共用的东西是
+ * 「怎么发 HTTP 请求」，那在 `OpenAiCompatibleClient` 里。
+ *
+ * @param baseUrl 向量服务的地址。留空表示不使用向量（记忆退回关键词匹配）
+ * @param apiKey 向量服务的 Key
+ * @param model 向量模型名，例如 text-embedding-3-small / bge-m3 / nomic-embed-text
+ */
+data class EmbeddingConfig(
+    val baseUrl: String = "",
+    val apiKey: String = "",
+    val model: String = "",
+) {
+    /** 三项都填了才算配置完整。 */
+    val isUsable: Boolean
+        get() = baseUrl.isNotBlank() && model.isNotBlank()
+
+    companion object {
+        /** 本地 Ollama 的默认地址，作为新建时的建议值。 */
+        const val OLLAMA_BASE_URL = "http://127.0.0.1:11434/v1"
+
+        /** 本地 Ollama 常用的向量模型。 */
+        const val OLLAMA_DEFAULT_MODEL = "nomic-embed-text"
+    }
 }

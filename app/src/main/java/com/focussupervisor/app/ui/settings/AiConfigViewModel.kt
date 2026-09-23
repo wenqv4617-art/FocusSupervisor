@@ -19,24 +19,14 @@ import kotlin.math.roundToInt
 /**
  * 「AI 配置中心」面板的状态。
  *
- * 编辑态（[draft]）与已保存态（[presets]）是**分开**的两份数据，这是刻意的：
- * 用户改了 Base URL 但还没点「保存当前」时，输入框里显示的是草稿，而预设列表里
- * 显示的还是磁盘上那一份。把两者合成一份的话，用户每敲一个字符都会触发一次落盘。
+ * 编辑态（[draft]）与已保存态（[presets]）是**分开**的两份数据：用户改了 Base URL
+ * 但还没点「保存当前」时，输入框里显示的是草稿，预设列表里还是磁盘上那一份。
  *
- * @param presets 已保存的全部预设
- * @param selectedPresetId 当前选中的预设
- * @param draftName 草稿的预设名
- * @param draft 草稿的端点配置
- * @param isApiKeyVisible Key 是否明文显示
- * @param isFetchingModels 正在拉取模型列表
+ * @param isSaving 正在写盘
  * @param isTesting 正在测试连接
- * @param fetchedModels 上一次「拉取」拿到的模型 id
- * @param isModelPickerVisible 是否展示模型选择列表
  * @param message 提示信息；null 表示没有
- * @param isMessageError true 表示 [message] 是错误（显示为提醒色），false 是普通提示
- * @param dismissRequested 握手成功后置位，Sheet 据此播完收起动画再关闭
+ * @param isMessageError true 表示 [message] 是错误（显示为提醒色）
  * @param isDirty 草稿与已保存内容是否存在差异
- * @param pickerTarget 「拉取」成功后，模型列表要填进哪个字段
  */
 data class AiConfigUiState(
     val presets: List<AiPreset> = emptyList(),
@@ -51,56 +41,42 @@ data class AiConfigUiState(
     val isApiKeyVisible: Boolean = false,
     val isFetchingModels: Boolean = false,
     val isTesting: Boolean = false,
+    val isSaving: Boolean = false,
     val fetchedModels: List<String> = emptyList(),
     val isModelPickerVisible: Boolean = false,
     val message: String? = null,
     val isMessageError: Boolean = true,
-    val dismissRequested: Boolean = false,
     val isDirty: Boolean = false,
-    val pickerTarget: ModelPickerTarget = ModelPickerTarget.CONVERSATION_MODEL,
 ) {
-    /** 当前选中的预设，找不到时为 null。 */
     val selectedPreset: AiPreset? get() = presets.firstOrNull { it.id == selectedPresetId }
 
-    /** 当前预设是不是内置的（内置的不能删）。 */
     val isSelectedBuiltIn: Boolean
         get() = selectedPresetId in AiPresetDefaults.BUILT_IN_IDS
 
-    /** 能不能发起测试：地址与模型都填了，且没有正在进行的请求。 */
-    val canTest: Boolean
-        get() = draft.isUsable && !isTesting && !isFetchingModels
+    /** 能不能发起测试或保存：地址与模型都填了，且没有正在进行的请求。 */
+    val isBusy: Boolean get() = isTesting || isFetchingModels || isSaving
 
-    /**
-     * 模型选择器里高亮哪一项。
-     *
-     * 取决于这次「拉取」是为哪个字段发起的 —— 否则两个字段会同时高亮同一个模型名，
-     * 用户根本分不清点下去会填到哪里。
-     */
-    fun currentPickerValue(): String = when (pickerTarget) {
-        ModelPickerTarget.CONVERSATION_MODEL -> draft.model
-        ModelPickerTarget.EMBEDDING_MODEL -> draft.embeddingModel
-    }
-}
+    val canTest: Boolean get() = draft.isUsable && !isBusy
 
-/** 「拉取」按钮是为哪个模型字段服务的。 */
-enum class ModelPickerTarget {
-    CONVERSATION_MODEL,
-    EMBEDDING_MODEL,
+    val canSave: Boolean get() = selectedPresetId.isNotBlank() && !isBusy
 }
 
 /**
- * 「AI 配置中心」的状态持有者。
+ * AI 配置面板的状态持有者。
  *
- * 分层的落地方式，正好在这里体现得最清楚：
- * ```
- *   AiConfigSheet（纯展示 + 收集输入）
- *        ↓ 调用
- *   AiConfigViewModel（编辑态、请求编排、消息提示）
- *        ↓ 调用
- *   AiConfigRepository（持久化）   OpenAiCompatibleClient（网络）
- * ```
- * Sheet 里没有任何一处直接碰 DataStore 或 OkHttp；网络错误也在这里被翻译成一句
- * 可以直接显示的中文，UI 只负责把它画成低饱和的红色文字。
+ * ===========================================================================
+ * 「测试连接」与「保存」是两件独立的事
+ * ===========================================================================
+ * 上一版把测试连接做成了「测试成功就自动保存、自动关面板」。那是错的，原因有两个：
+ *
+ *  1. **用户在点按钮之前无法预期它会写盘**。他可能只是想试试某个地址通不通，
+ *     结果当前预设被悄悄改掉了。
+ *  2. **面板一关，失败信息就没有地方显示了**。用户在配置页里连试三次都失败，
+ *     每次都看不到原因，只能靠聊天记录里那条系统胶囊 —— 而归因必须发生在他
+ *     改配置的那个界面上。
+ *
+ * 现在：保存只保存，测试只测试。测试成功显示一行灰色的「握手成功」，失败显示
+ * 低饱和红字，**面板始终留在原地**。
  */
 class AiConfigViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -112,23 +88,18 @@ class AiConfigViewModel(application: Application) : AndroidViewModel(application
     private val _uiState = MutableStateFlow(AiConfigUiState())
     val uiState: StateFlow<AiConfigUiState> = _uiState.asStateFlow()
 
-    /** 正在进行的模型拉取任务。重复点击时先取消上一个。 */
     private var fetchJob: Job? = null
 
     init {
         observeRepository()
     }
 
-    /**
-     * 订阅仓库。只跟随「选中项变了」这一件事刷新草稿，其余情况只更新预设列表。
-     */
     private fun observeRepository() {
         viewModelScope.launch {
             repository.presets.collect { presets ->
                 _uiState.update { state ->
                     val stillSelected = presets.any { it.id == state.selectedPresetId }
                     if (!stillSelected && presets.isNotEmpty()) {
-                        // 选中的预设被删掉了（或首次加载），被动回落到第一个。
                         val fallback = presets.first()
                         state.copy(
                             presets = presets,
@@ -156,7 +127,6 @@ class AiConfigViewModel(application: Application) : AndroidViewModel(application
                             selectedPresetId = preset.id,
                             draftName = preset.name,
                             draft = preset.config,
-                            // 切换预设时清掉上一条提示与拉取结果 —— 它们属于上一个端点。
                             message = null,
                             fetchedModels = emptyList(),
                             isModelPickerVisible = false,
@@ -169,20 +139,19 @@ class AiConfigViewModel(application: Application) : AndroidViewModel(application
     }
 
     /**
-     * 面板每次打开时调用：把草稿重置成磁盘上的那一份。
+     * 面板每次打开时把草稿重置成磁盘上的那一份。
      *
-     * 为什么需要：ViewModel 的寿命比 Sheet 长（它挂在 Activity 的 ViewModelStore 上），
-     * 用户上次没保存就关掉面板，下次打开看到的会是那份被丢弃的草稿。重置之后语义
-     * 就清楚了 —— 打开面板 = 看到真实生效的配置。
+     * ViewModel 的寿命比 Sheet 长，用户上次没保存就关掉面板，下次打开看到的会是
+     * 那份被丢弃的草稿。重置之后语义就清楚了：打开面板 = 看到真实生效的配置。
      */
     fun onSheetOpened() {
-        val current = repository.presets.value.firstOrNull {
-            it.id == repository.selectedPresetId.value
-        } ?: repository.presets.value.firstOrNull()
+        val presets = repository.presets.value
+        val current = presets.firstOrNull { it.id == repository.selectedPresetId.value }
+            ?: presets.firstOrNull()
 
         _uiState.update { state ->
             if (current == null) {
-                state.copy(dismissRequested = false, message = null)
+                state.copy(message = null)
             } else {
                 state.copy(
                     selectedPresetId = current.id,
@@ -194,7 +163,7 @@ class AiConfigViewModel(application: Application) : AndroidViewModel(application
                     isModelPickerVisible = false,
                     isTesting = false,
                     isFetchingModels = false,
-                    dismissRequested = false,
+                    isSaving = false,
                     isDirty = false,
                 )
             }
@@ -217,9 +186,6 @@ class AiConfigViewModel(application: Application) : AndroidViewModel(application
 
     fun onModelChange(value: String) = editDraft { it.copy(model = value.trim()) }
 
-    fun onEmbeddingModelChange(value: String) =
-        editDraft { it.copy(embeddingModel = value.trim()) }
-
     /**
      * 前置提示。
      *
@@ -234,7 +200,7 @@ class AiConfigViewModel(application: Application) : AndroidViewModel(application
      *
      * 手动吸附到 0.1 的整数倍，而不是只依赖 `Slider` 的 `steps`：
      * `steps` 只保证「手指停在离散点上」，浮点累积误差仍然会让实际值变成
-     * 0.7000001 这种数；显示出来就是「0.7000001」，很难看，写进配置也脏。
+     * 0.7000001 这种数；显示出来就是「0.7000001」，写进配置也脏。
      */
     fun onTemperatureChange(value: Float) {
         val snapped = (value.coerceIn(AiConfig.MIN_TEMPERATURE, AiConfig.MAX_TEMPERATURE) * 10)
@@ -251,19 +217,12 @@ class AiConfigViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun onModelPicked(model: String) {
-        _uiState.update {
-            it.applyPickedModel(model)
-                .copy(isModelPickerVisible = false, message = null)
-                .withRecalculatedDirty()
-        }
+        editDraft { it.copy(model = model) }
+        _uiState.update { it.copy(isModelPickerVisible = false, message = null) }
     }
 
     fun onMessageDismissed() {
         _uiState.update { it.copy(message = null) }
-    }
-
-    fun onDismissRequestHandled() {
-        _uiState.update { it.copy(dismissRequested = false) }
     }
 
     // -----------------------------------------------------------------------
@@ -273,24 +232,10 @@ class AiConfigViewModel(application: Application) : AndroidViewModel(application
     /**
      * 拉取端点支持的模型列表。
      *
-     * 失败时把错误留在面板里（低饱和红字），**不关闭面板** —— 用户正在这里改配置，
+     * 失败时把错误留在面板里，**不关闭面板** —— 用户正在这里改配置，
      * 把他弹出去等于让他从头再来一遍。
      */
-    fun fetchModels() = fetchModelsFor(ModelPickerTarget.CONVERSATION_MODEL)
-
-    fun fetchEmbeddingModels() = fetchModelsFor(ModelPickerTarget.EMBEDDING_MODEL)
-
-    /**
-     * 拉取端点支持的模型列表。
-     *
-     * 失败时把错误留在面板里（低饱和红字），**不关闭面板** —— 用户正在这里改配置，
-     * 把他弹出去等于让他从头再来一遍。
-     *
-     * 两个模型字段共用这一条链路，靠 [ModelPickerTarget] 记住结果该填到哪里：
-     * 绝大多数端点把对话模型和向量模型放在同一个 `/models` 列表里，
-     * 分两条代码路径只会让它们慢慢长歪。
-     */
-    private fun fetchModelsFor(target: ModelPickerTarget) {
+    fun fetchModels() {
         val draft = _uiState.value.draft
         if (draft.baseUrl.isBlank()) {
             showMessage("请先填写 Base URL", isError = true)
@@ -299,12 +244,7 @@ class AiConfigViewModel(application: Application) : AndroidViewModel(application
 
         fetchJob?.cancel()
         _uiState.update {
-            it.copy(
-                isFetchingModels = true,
-                message = null,
-                isModelPickerVisible = false,
-                pickerTarget = target,
-            )
+            it.copy(isFetchingModels = true, message = null, isModelPickerVisible = false)
         }
 
         fetchJob = viewModelScope.launch {
@@ -322,22 +262,20 @@ class AiConfigViewModel(application: Application) : AndroidViewModel(application
                             )
 
                             // 只有一个模型时不用弹选择器，直接填上更省一步。
-                            models.size == 1 -> state
-                                .applyPickedModel(models.first())
-                                .copy(
-                                    isFetchingModels = false,
-                                    fetchedModels = models,
-                                    isModelPickerVisible = false,
-                                    message = "已填入唯一可用模型",
-                                    isMessageError = false,
-                                )
-                                .withRecalculatedDirty()
+                            models.size == 1 -> state.copy(
+                                isFetchingModels = false,
+                                fetchedModels = models,
+                                isModelPickerVisible = false,
+                                draft = state.draft.copy(model = models.first()),
+                                message = "已填入唯一可用模型",
+                                isMessageError = false,
+                            ).withRecalculatedDirty()
 
                             else -> state.copy(
                                 isFetchingModels = false,
                                 fetchedModels = models,
                                 isModelPickerVisible = true,
-                                message = "拉到 ${models.size} 个模型",
+                                message = "拉到 ${models.size} 个模型，点一个填进去",
                                 isMessageError = false,
                             )
                         }
@@ -357,16 +295,17 @@ class AiConfigViewModel(application: Application) : AndroidViewModel(application
     }
 
     // -----------------------------------------------------------------------
-    // 保存与新建
+    // 保存
     // -----------------------------------------------------------------------
 
-    /** 把当前草稿写回选中的预设。 */
+    /** 把当前草稿写回选中的预设。**只写盘，不做任何别的动作。** */
     fun saveCurrentPreset() {
         val state = _uiState.value
         if (state.selectedPresetId.isBlank()) {
             showMessage("没有可保存的预设，请先新建一个", isError = true)
             return
         }
+        if (state.isSaving) return
 
         val preset = AiPreset(
             id = state.selectedPresetId,
@@ -374,12 +313,16 @@ class AiConfigViewModel(application: Application) : AndroidViewModel(application
             config = state.draft,
         )
 
+        _uiState.update { it.copy(isSaving = true, message = null) }
         viewModelScope.launch {
-            if (repository.savePreset(preset)) {
-                _uiState.update { it.copy(isDirty = false) }
-                showMessage("已保存到本地", isError = false)
-            } else {
-                showMessage("保存失败，请稍后重试", isError = true)
+            val ok = repository.savePreset(preset)
+            _uiState.update {
+                it.copy(
+                    isSaving = false,
+                    isDirty = if (ok) false else it.isDirty,
+                    message = if (ok) "已保存到本地" else "保存失败，请稍后重试",
+                    isMessageError = !ok,
+                )
             }
         }
     }
@@ -437,14 +380,11 @@ class AiConfigViewModel(application: Application) : AndroidViewModel(application
     // -----------------------------------------------------------------------
 
     /**
-     * 测试连接。
+     * 测试连接。**只测，不保存，不关面板。**
      *
-     * 成功时做三件事，顺序不能反：
-     *  1. **先把配置存下来** —— 用户刚刚验证通过了一套配置，丢掉它是最伤人的；
-     *  2. 往会话流里插一条系统胶囊（走仓库的播报通道，不直接碰聊天状态）；
-     *  3. 置 dismissRequested，让面板播完收起动画再关闭。
-     *
-     * 失败时只更新面板内的错误文字，面板保持打开。
+     * 往会话流里插一条系统胶囊（让聊天记录里留下「哪一刻握手成功过」），
+     * 同时在面板内显示结果 —— 两个地方都要有，因为它们服务不同的场景：
+     * 胶囊供回看，面板内的文字供当场判断下一步改什么。
      */
     fun testConnection() {
         val state = _uiState.value
@@ -452,6 +392,7 @@ class AiConfigViewModel(application: Application) : AndroidViewModel(application
             showMessage("Base URL 与模型名都不能为空", isError = true)
             return
         }
+        if (state.isTesting) return
 
         _uiState.update { it.copy(isTesting = true, message = null, isModelPickerVisible = false) }
 
@@ -459,25 +400,15 @@ class AiConfigViewModel(application: Application) : AndroidViewModel(application
             val result = client.testConnection(state.draft)
             result.fold(
                 onSuccess = { reply ->
-                    // 1. 落盘
-                    val preset = AiPreset(
-                        id = state.selectedPresetId,
-                        name = state.draftName.ifBlank { state.selectedPreset?.name.orEmpty() },
-                        config = state.draft,
-                    )
-                    repository.savePreset(preset)
-
-                    // 2. 会话播报。前缀由仓库补，这里只写正事。
                     policy.publishNotice("AI 终端握手成功，当前模型：${state.draft.model}")
-
-                    // 3. 关闭面板
                     _uiState.update {
                         it.copy(
                             isTesting = false,
-                            isDirty = false,
-                            message = reply.takeIf { text -> text.isNotBlank() },
+                            message = buildString {
+                                append("握手成功")
+                                if (reply.isNotBlank()) append(" · 模型回了：").append(reply.take(40))
+                            },
                             isMessageError = false,
-                            dismissRequested = true,
                         )
                     }
                 },
@@ -498,12 +429,10 @@ class AiConfigViewModel(application: Application) : AndroidViewModel(application
     // 内部工具
     // -----------------------------------------------------------------------
 
-    /** 改草稿的名字。 */
     private fun editDraft(name: String) {
         _uiState.update { it.copy(draftName = name, message = null).withRecalculatedDirty() }
     }
 
-    /** 改草稿的配置。任何一次编辑都顺带清掉上一条提示（它已经过期了）。 */
     private fun editDraft(transform: (AiConfig) -> AiConfig) {
         _uiState.update { state ->
             state.copy(
@@ -514,25 +443,14 @@ class AiConfigViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    /** 把模型名填进当前 picker 指向的字段。纯函数，不产生副作用。 */
-    private fun AiConfigUiState.applyPickedModel(model: String): AiConfigUiState = when (pickerTarget) {
-        ModelPickerTarget.CONVERSATION_MODEL -> copy(draft = draft.copy(model = model))
-        ModelPickerTarget.EMBEDDING_MODEL -> copy(draft = draft.copy(embeddingModel = model))
-    }
-
     private fun showMessage(text: String, isError: Boolean) {
         _uiState.update { it.copy(message = text, isMessageError = isError) }
     }
 
-    /**
-     * 重算「草稿是否与已保存内容不同」。
-     *
-     * 界面上用它来决定要不要把「保存当前」显示成强调态 —— 没有改动时不给视觉噪音。
-     */
+    /** 重算「草稿是否与已保存内容不同」，界面据此决定要不要把保存按钮点亮。 */
     private fun AiConfigUiState.withRecalculatedDirty(): AiConfigUiState {
         val saved = presets.firstOrNull { it.id == selectedPresetId } ?: return copy(isDirty = false)
-        val dirty = saved.name != draftName || saved.config != draft
-        return copy(isDirty = dirty)
+        return copy(isDirty = saved.name != draftName || saved.config != draft)
     }
 
     /**
@@ -543,16 +461,11 @@ class AiConfigViewModel(application: Application) : AndroidViewModel(application
      */
     private fun friendlyMessage(throwable: Throwable): String = when (throwable) {
         is AiClientException -> throwable.message ?: "请求失败"
-        else -> throwable.message?.takeIf { it.isNotBlank() } ?: "请求失败：${throwable.javaClass.simpleName}"
+        else -> throwable.message?.takeIf { it.isNotBlank() }
+            ?: "请求失败：${throwable.javaClass.simpleName}"
     }
 
     private companion object {
-        /**
-         * 前置提示的长度上限。
-         *
-         * 8000 字符大致相当于 4000 token，已经是一段很长的设定了。再往上加，
-         * 注入内容会把记忆与待办的上下文预算挤光 —— 那才是真正的损失。
-         */
         const val MAX_PRE_PROMPT_LENGTH = 8000
     }
 }

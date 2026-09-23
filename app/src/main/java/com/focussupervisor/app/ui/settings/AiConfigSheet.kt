@@ -72,23 +72,6 @@ fun AiConfigSheet(
     // 面板每次重新进入组合时把草稿重置成磁盘上那一份，避免上次没保存的编辑残留。
     LaunchedEffect(Unit) { viewModel.onSheetOpened() }
 
-    // 握手成功后先播完收起动画再真正关闭：直接调用 onDismiss 会把 Sheet 从组合里
-    // 摘掉，用户看到的是「啪」地消失而不是滑下去。
-    LaunchedEffect(uiState.dismissRequested) {
-        if (!uiState.dismissRequested) return@LaunchedEffect
-
-        // 这里显式 catch Throwable 是有意的：hide() 在动画被取消时抛
-        // CancellationException，而那种情况下 Sheet 本来就在关，接下来的收尾
-        // 必须照常执行 —— 漏掉 onDismiss 会让面板永远卡在屏幕上。
-        try {
-            sheetState.hide()
-        } catch (ignored: Throwable) {
-            // 动画没播完不影响收尾
-        }
-        viewModel.onDismissRequestHandled()
-        onDismiss()
-    }
-
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         modifier = modifier,
@@ -103,7 +86,6 @@ fun AiConfigSheet(
             onBaseUrlChange = viewModel::onBaseUrlChange,
             onApiKeyChange = viewModel::onApiKeyChange,
             onModelChange = viewModel::onModelChange,
-            onEmbeddingModelChange = viewModel::onEmbeddingModelChange,
             onPrePromptChange = viewModel::onPrePromptChange,
             onTemperatureChange = viewModel::onTemperatureChange,
             onToggleApiKeyVisibility = viewModel::toggleApiKeyVisibility,
@@ -115,6 +97,7 @@ fun AiConfigSheet(
             onCreatePreset = viewModel::createPreset,
             onDeletePreset = viewModel::deleteCurrentPreset,
             onTestConnection = viewModel::testConnection,
+            onClose = onDismiss,
         )
     }
 }
@@ -130,18 +113,17 @@ private fun AiConfigContent(
     onBaseUrlChange: (String) -> Unit,
     onApiKeyChange: (String) -> Unit,
     onModelChange: (String) -> Unit,
-    onEmbeddingModelChange: (String) -> Unit,
     onPrePromptChange: (String) -> Unit,
     onTemperatureChange: (Float) -> Unit,
     onToggleApiKeyVisibility: () -> Unit,
     onFetchModels: () -> Unit,
-    onFetchEmbeddingModels: () -> Unit,
     onModelPicked: (String) -> Unit,
     onModelPickerDismiss: () -> Unit,
     onSaveCurrent: () -> Unit,
     onCreatePreset: () -> Unit,
     onDeletePreset: () -> Unit,
     onTestConnection: () -> Unit,
+    onClose: () -> Unit,
 ) {
     Column(
         modifier = Modifier
@@ -151,12 +133,24 @@ private fun AiConfigContent(
             .padding(bottom = SheetBottomPadding),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        SheetTitle(text = "AI 配置中心")
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+        ) {
+            SheetTitle(text = "AI 配置中心", modifier = Modifier.weight(1f))
+            // 面板不再「测试成功就自动关闭」，所以需要一个明确的关闭入口。
+            TextButton(onClick = onClose) {
+                Text(
+                    text = "关闭",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = FocusTheme.colors.textSecondary,
+                )
+            }
+        }
 
         PresetBar(
             uiState = uiState,
             onPresetSelected = onPresetSelected,
-            onSaveCurrent = onSaveCurrent,
             onCreatePreset = onCreatePreset,
             onDeletePreset = onDeletePreset,
         )
@@ -214,25 +208,10 @@ private fun AiConfigContent(
             },
         )
 
-        SheetTextField(
-            label = "向量模型（可选）",
-            value = uiState.draft.embeddingModel,
-            onValueChange = onEmbeddingModelChange,
-            placeholder = "text-embedding-3-small",
-            monospace = true,
-            trailing = {
-                FetchButton(
-                    isFetching = uiState.isFetchingModels,
-                    onClick = onFetchEmbeddingModels,
-                )
-            },
-            footer = "用于记忆检索。留空则记忆退回关键词匹配，功能可用但召回质量会差一些。",
-        )
-
         if (uiState.isModelPickerVisible && uiState.fetchedModels.isNotEmpty()) {
             ModelPicker(
                 models = uiState.fetchedModels,
-                currentModel = uiState.currentPickerValue(),
+                currentModel = uiState.draft.model,
                 onModelPicked = onModelPicked,
                 onDismiss = onModelPickerDismiss,
             )
@@ -255,11 +234,27 @@ private fun AiConfigContent(
 
         SheetMessageLine(message = uiState.message, isError = uiState.isMessageError)
 
-        SheetPrimaryButton(
-            text = if (uiState.isTesting) "测试中…" else "测试连接",
-            enabled = uiState.canTest,
-            onClick = onTestConnection,
-        )
+        // 保存与测试是两件独立的事，两个按钮并排。
+        // 上一版把测试做成「成功就自动保存并关面板」—— 用户在点之前无法预期它会写盘，
+        // 而且面板一关，失败原因就没地方显示了。
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            SheetPrimaryButton(
+                text = when {
+                    uiState.isSaving -> "保存中…"
+                    uiState.isDirty -> "保存修改"
+                    else -> "保存"
+                },
+                enabled = uiState.canSave,
+                onClick = onSaveCurrent,
+                modifier = Modifier.weight(1f),
+            )
+            SheetSecondaryButton(
+                text = if (uiState.isTesting) "测试中…" else "测试连接",
+                enabled = uiState.canTest,
+                onClick = onTestConnection,
+                modifier = Modifier.weight(1f),
+            )
+        }
     }
 }
 
@@ -285,7 +280,6 @@ private fun baseUrlFooter(baseUrl: String): String =
 private fun PresetBar(
     uiState: AiConfigUiState,
     onPresetSelected: (String) -> Unit,
-    onSaveCurrent: () -> Unit,
     onCreatePreset: () -> Unit,
     onDeletePreset: () -> Unit,
 ) {
@@ -315,17 +309,6 @@ private fun PresetBar(
         }
 
         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            TextButton(onClick = onSaveCurrent) {
-                Text(
-                    text = if (uiState.isDirty) "保存当前 ·" else "保存当前",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (uiState.isDirty) {
-                        FocusTheme.colors.accent
-                    } else {
-                        FocusTheme.colors.textSecondary
-                    },
-                )
-            }
             if (!uiState.isSelectedBuiltIn && uiState.selectedPresetId.isNotBlank()) {
                 TextButton(onClick = onDeletePreset) {
                     Text(

@@ -65,6 +65,7 @@ import com.focussupervisor.app.ui.components.PlusActionPanel
 import com.focussupervisor.app.ui.components.PolicyStatusDialog
 import com.focussupervisor.app.ui.components.defaultActionItems
 import com.focussupervisor.app.ui.settings.AiConfigSheet
+import com.focussupervisor.app.ui.settings.EmbeddingSheet
 import com.focussupervisor.app.ui.settings.MemorySheet
 import com.focussupervisor.app.ui.settings.PersonaSheet
 import com.focussupervisor.app.ui.theme.FocusSupervisorTheme
@@ -121,6 +122,15 @@ fun ChatRoute(
         onAiConfigDismiss = viewModel::onAiConfigSheetDismiss,
         onPersonaDismiss = viewModel::onPersonaSheetDismiss,
         onMemoryDismiss = viewModel::onMemorySheetDismiss,
+        onEmbeddingDismiss = viewModel::onEmbeddingSheetDismiss,
+        onMessageLongPress = viewModel::onMessageLongPress,
+        onMessageActionDismiss = viewModel::onMessageActionDismiss,
+        onMessageEditRequested = viewModel::onMessageEditRequested,
+        onMessageDeleteRequested = viewModel::onMessageDeleteRequested,
+        onMessageEditDismiss = viewModel::onMessageEditDismiss,
+        onMessageEditSubmit = viewModel::onMessageEditSubmit,
+        onMessageDeleteDismiss = viewModel::onMessageDeleteDismiss,
+        onMessageDeleteConfirm = viewModel::onMessageDeleteConfirm,
         modifier = modifier,
     )
 }
@@ -138,6 +148,15 @@ fun ChatRoute(
  * @param onAiConfigDismiss 关闭「AI 配置中心」。
  * @param onPersonaDismiss 关闭「人设管理」。
  * @param onMemoryDismiss 关闭「记忆管理」。
+ * @param onEmbeddingDismiss 关闭「向量模型」。
+ * @param onMessageLongPress 长按某条消息。
+ * @param onMessageActionDismiss 关闭长按操作面板。
+ * @param onMessageEditRequested 从操作面板进入编辑。
+ * @param onMessageDeleteRequested 从操作面板进入删除确认。
+ * @param onMessageEditDismiss 取消编辑。
+ * @param onMessageEditSubmit 提交编辑后的正文。
+ * @param onMessageDeleteDismiss 取消删除。
+ * @param onMessageDeleteConfirm 确认删除。
  */
 @Composable
 fun ChatScreen(
@@ -151,6 +170,15 @@ fun ChatScreen(
     onAiConfigDismiss: () -> Unit,
     onPersonaDismiss: () -> Unit,
     onMemoryDismiss: () -> Unit,
+    onEmbeddingDismiss: () -> Unit,
+    onMessageLongPress: (ChatMessage) -> Unit,
+    onMessageActionDismiss: () -> Unit,
+    onMessageEditRequested: () -> Unit,
+    onMessageDeleteRequested: () -> Unit,
+    onMessageEditDismiss: () -> Unit,
+    onMessageEditSubmit: (String) -> Unit,
+    onMessageDeleteDismiss: () -> Unit,
+    onMessageDeleteConfirm: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Scaffold(
@@ -175,6 +203,7 @@ fun ChatScreen(
         MessageList(
             messages = uiState.messages,
             personas = uiState.personas,
+            onMessageLongPress = onMessageLongPress,
             contentPadding = scaffoldPadding,
         )
     }
@@ -215,6 +244,37 @@ fun ChatScreen(
 
     if (uiState.isMemorySheetVisible) {
         MemorySheet(onDismiss = onMemoryDismiss)
+    }
+
+    if (uiState.isEmbeddingSheetVisible) {
+        EmbeddingSheet(onDismiss = onEmbeddingDismiss)
+    }
+
+    // 长按消息的三步：操作面板 → 编辑 / 删除确认。
+    // 三者互斥由 ViewModel 保证（进入下一步前先把上一步的目标清空）。
+    uiState.messageActionTarget?.let { target ->
+        MessageActionSheet(
+            message = target,
+            onEdit = onMessageEditRequested,
+            onDelete = onMessageDeleteRequested,
+            onDismiss = onMessageActionDismiss,
+        )
+    }
+
+    uiState.messageEditTarget?.let { target ->
+        MessageEditDialog(
+            message = target,
+            onSubmit = onMessageEditSubmit,
+            onDismiss = onMessageEditDismiss,
+        )
+    }
+
+    uiState.messageDeleteTarget?.let { target ->
+        MessageDeleteDialog(
+            message = target,
+            onConfirm = onMessageDeleteConfirm,
+            onDismiss = onMessageDeleteDismiss,
+        )
     }
 }
 
@@ -283,6 +343,7 @@ private fun ChatTopBar(
 private fun MessageList(
     messages: List<ChatMessage>,
     personas: PersonaPair,
+    onMessageLongPress: (ChatMessage) -> Unit,
     contentPadding: PaddingValues,
 ) {
     val listState = rememberLazyListState()
@@ -319,7 +380,11 @@ private fun MessageList(
                     // 内部状态与滚动位置，不会整列表重画。
                     key = { message -> message.id },
                 ) { message ->
-                    MessageBubble(message = message, personas = personas)
+                    MessageBubble(
+                        message = message,
+                        personas = personas,
+                        onLongPress = onMessageLongPress,
+                    )
                 }
             }
         }
@@ -498,6 +563,15 @@ private fun ChatScreenPreview() {
             onAiConfigDismiss = {},
             onPersonaDismiss = {},
             onMemoryDismiss = {},
+            onEmbeddingDismiss = {},
+            onMessageLongPress = {},
+            onMessageActionDismiss = {},
+            onMessageEditRequested = {},
+            onMessageDeleteRequested = {},
+            onMessageEditDismiss = {},
+            onMessageEditSubmit = {},
+            onMessageDeleteDismiss = {},
+            onMessageDeleteConfirm = {},
         )
     }
 }
@@ -522,6 +596,15 @@ private fun ChatScreenPanelExpandedPreview() {
             onAiConfigDismiss = {},
             onPersonaDismiss = {},
             onMemoryDismiss = {},
+            onEmbeddingDismiss = {},
+            onMessageLongPress = {},
+            onMessageActionDismiss = {},
+            onMessageEditRequested = {},
+            onMessageDeleteRequested = {},
+            onMessageEditDismiss = {},
+            onMessageEditSubmit = {},
+            onMessageDeleteDismiss = {},
+            onMessageDeleteConfirm = {},
         )
     }
 }

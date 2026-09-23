@@ -119,6 +119,10 @@ enum class ChatDialog {
  * @param isMemorySheetVisible 「记忆管理」是否展开。
  * @param isSending 正在等模型回复。
  * @param personas 会话双方的人设快照，供消息列表渲染头像与姓名。
+ * @param isEmbeddingSheetVisible 「向量模型」是否展开。
+ * @param messageActionTarget 长按选中的消息，非空时弹出操作面板。
+ * @param messageEditTarget 正在编辑的消息，非空时弹出编辑框。
+ * @param messageDeleteTarget 待确认删除的消息，非空时弹出确认框。
  */
 data class ChatUiState(
     val agentName: String = "FocusSupervisor",
@@ -137,6 +141,10 @@ data class ChatUiState(
     val isMemorySheetVisible: Boolean = false,
     val isSending: Boolean = false,
     val personas: PersonaPair = PersonaPair(),
+    val isEmbeddingSheetVisible: Boolean = false,
+    val messageActionTarget: ChatMessage? = null,
+    val messageEditTarget: ChatMessage? = null,
+    val messageDeleteTarget: ChatMessage? = null,
 ) {
     /** 有非空白草稿时才允许发送，避免发出一条空消息。 */
     val canSend: Boolean get() = inputText.isNotBlank()

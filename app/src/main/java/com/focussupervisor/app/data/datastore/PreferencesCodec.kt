@@ -5,6 +5,7 @@ import com.focussupervisor.app.domain.model.AiConfig
 import com.focussupervisor.app.domain.model.AiPersona
 import com.focussupervisor.app.domain.model.AiPreset
 import com.focussupervisor.app.domain.model.ChatMessage
+import com.focussupervisor.app.domain.model.EmbeddingConfig
 import com.focussupervisor.app.domain.model.IndexedDocKind
 import com.focussupervisor.app.domain.model.IndexedDocument
 import com.focussupervisor.app.domain.model.MemoryEntry
@@ -132,7 +133,6 @@ internal object PreferencesCodec {
                     // org.json 只有 put(String, double)，Float 会被隐式提升；
                     // 读回来再转 Float，往返精度对 0.1 这种步进足够。
                     put(FIELD_TEMPERATURE, preset.config.temperature.toDouble())
-                    put(FIELD_EMBEDDING_MODEL, preset.config.embeddingModel)
                     // 前置提示可能很长且含换行，JSON 会自己转义，不需要特殊处理。
                     put(FIELD_PRE_PROMPT, preset.config.prePrompt)
                 },
@@ -154,9 +154,28 @@ internal object PreferencesCodec {
                     FIELD_TEMPERATURE,
                     AiConfig.DEFAULT_TEMPERATURE.toDouble(),
                 ).toFloat(),
-                embeddingModel = obj.optString(FIELD_EMBEDDING_MODEL),
                 prePrompt = obj.optString(FIELD_PRE_PROMPT),
             ),
+        )
+    }
+
+    // =======================================================================
+    // 向量模型配置
+    // =======================================================================
+
+    fun encodeEmbeddingConfig(config: EmbeddingConfig): String = JSONObject().apply {
+        put(FIELD_BASE_URL, config.baseUrl)
+        put(FIELD_API_KEY, config.apiKey)
+        put(FIELD_MODEL, config.model)
+    }.toString()
+
+    fun decodeEmbeddingConfig(json: String?): EmbeddingConfig {
+        if (json.isNullOrBlank()) return EmbeddingConfig()
+        val obj = runCatching { JSONObject(json) }.getOrNull() ?: return EmbeddingConfig()
+        return EmbeddingConfig(
+            baseUrl = obj.optString(FIELD_BASE_URL),
+            apiKey = obj.optString(FIELD_API_KEY),
+            model = obj.optString(FIELD_MODEL),
         )
     }
 
@@ -417,7 +436,6 @@ internal object PreferencesCodec {
     private const val FIELD_API_KEY = "apiKey"
     private const val FIELD_MODEL = "model"
     private const val FIELD_TEMPERATURE = "temperature"
-    private const val FIELD_EMBEDDING_MODEL = "embeddingModel"
     private const val FIELD_PRE_PROMPT = "prePrompt"
     private const val FIELD_AVATAR_PATH = "avatarPath"
     private const val FIELD_GENDER = "gender"
