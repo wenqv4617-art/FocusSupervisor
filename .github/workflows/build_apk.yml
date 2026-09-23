@@ -2,10 +2,14 @@
 #  FocusSupervisor —— 自动打包 debug APK
 #
 #  触发：push 到 main，或在 Actions 页面手动 workflow_dispatch。
-#  产物：app-debug.apk，作为 artifact 上传，保留 7 天，用户在网页上自行下载。
+#  产物：app-debug.apk，作为 artifact 上传，保留 1 天，用户在网页上自行下载。
 #
-#  刻意只打 debug：debug 包由 AGP 用自动生成的 debug 密钥签名，装得上、可直接
-#  覆盖安装；release 需要签名密钥，等仓库 Secrets 配好之后再加一个 job。
+#  签名：用仓库里那把**固定的**调试密钥（app/debug.keystore），所以每次构建的
+#  签名完全一致，新包能直接覆盖安装 —— 不再需要「先卸载再安装」。
+#  AGP 默认每次在构建机上现生成一把调试密钥，那样两次 CI 的签名不同，覆盖安装
+#  必然失败，这正是这次要修掉的问题。
+#  发布签名（可选）：app/build.gradle.kts 已支持 FOCUS_KEYSTORE_PATH 等环境变量，
+#  在仓库 Secrets 里配好之后把密钥喂给构建即可切过去，步骤见 README「签名」一节。
 # ============================================================================
 
 name: Build Debug APK
@@ -79,6 +83,20 @@ jobs:
 
       - name: 编译 debug APK
         run: ./gradlew assembleDebug --stacktrace
+
+      - name: 校验签名证书
+        # 能否覆盖安装，只取决于这个指纹稳不稳定。把它打印出来，出问题时一眼就能
+        # 判断「这次用的是不是仓库里那把固定密钥」。期望值见 README「签名」一节。
+        run: |
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          APKSIGNER="$(ls -d "$SDK"/build-tools/*/apksigner 2>/dev/null | tail -1)"
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          if [ -n "$APKSIGNER" ] && [ -f "$APK" ]; then
+            "$APKSIGNER" verify --print-certs "$APK" \
+              | grep -E "certificate DN|SHA-256 digest" || true
+          else
+            echo "::warning::找不到 apksigner 或 APK，跳过签名校验"
+          fi
 
       - name: 列出产物（便于排查）
         if: always()

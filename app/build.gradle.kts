@@ -17,6 +17,19 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
+// ---- 签名密钥 --------------------------------------------------------------
+//
+// 调试密钥是 Android 生态里**公开**的东西（口令就是 android），所以这几个值直接写在
+// 构建脚本里没有任何保密问题 —— 它唯一的用途是让签名**稳定**。
+// 发布密钥相反：只从环境变量读，仓库里一个字都不留（见 android.signingConfigs）。
+val DEBUG_KEYSTORE_FILE = "debug.keystore"
+val DEBUG_KEYSTORE_PASSWORD = "android"
+val DEBUG_KEY_ALIAS = "androiddebugkey"
+
+/** 发布密钥文件的路径。CI（或本机）通过 FOCUS_KEYSTORE_PATH 提供，缺省为空。 */
+val releaseKeystorePath: String? =
+    System.getenv("FOCUS_KEYSTORE_PATH")?.takeIf { it.isNotBlank() }
+
 android {
     namespace = "com.focussupervisor.app"
     compileSdk = 35
@@ -38,10 +51,46 @@ android {
         vectorDrawables { useSupportLibrary = true }
     }
 
+    // ---- 签名 --------------------------------------------------------------
+    //
+    // 固定的**调试**密钥，直接提交在 app/debug.keystore（照 rpbox 的做法）。
+    //
+    // 为什么必须固定：AGP 默认在每台构建机上自动生成一把新的调试密钥，于是两次 CI
+    // 产出的 APK 签名不同，覆盖安装必然报 INSTALL_FAILED_UPDATE_INCOMPATIBLE ——
+    // 用户看到的现象就是「每次更新都得先卸载」，而卸载会清空全部数据。
+    //
+    // 必须说清楚它的性质：这是一把**公开**密钥（口令就是 Android 约定的
+    // android / android），它只保证签名**稳定**，不提供任何保密性 —— 仓库里的
+    // 任何人都能拿它签出一个系统愿意当作升级包接受的 APK。它适合自用与内测，
+    // 不适合上架。真正的发布签名走下面的 release 配置（从环境变量读密钥，
+    // 绝不入库），配好 CI Secrets 之后换过去即可，代价是那一次要重新卸载安装。
+    signingConfigs {
+        getByName("debug") {
+            storeFile = file(DEBUG_KEYSTORE_FILE)
+            storePassword = DEBUG_KEYSTORE_PASSWORD
+            keyAlias = DEBUG_KEY_ALIAS
+            keyPassword = DEBUG_KEYSTORE_PASSWORD
+        }
+
+        // 只有在提供了密钥文件的环境里才创建这个配置 —— 别人 clone 下来直接构建时，
+        // 配置阶段不能因为缺少密钥而失败。
+        val releaseKeystore = releaseKeystorePath
+        if (releaseKeystore != null) {
+            create("release") {
+                storeFile = file(releaseKeystore)
+                storePassword = System.getenv("FOCUS_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("FOCUS_KEY_ALIAS")
+                keyPassword = System.getenv("FOCUS_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         debug {
             isMinifyEnabled = false
             isDebuggable = true
+            // 用仓库里那把固定密钥顶掉 AGP 自动生成的临时密钥。
+            signingConfig = signingConfigs.getByName("debug")
         }
         release {
             // 骨架阶段先不开混淆：等真正接入代码后，再按需打开并补 keep 规则。
@@ -50,6 +99,13 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
             )
+            // 没有发布密钥时退回固定调试密钥：release 变体照样产出可安装的包，
+            // 不会因为「没配密钥」而在打包中途失败。
+            signingConfig = if (releaseKeystorePath != null) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
         }
     }
 

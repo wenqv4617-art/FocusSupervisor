@@ -16,11 +16,17 @@ captures/
 .vscode/
 .DS_Store
 
-# ---- 密钥：绝不入库 --------------------------------------------------------
+# ---- 密钥 ------------------------------------------------------------------
+# 真实密钥绝不入库：发布密钥只从环境变量 / CI Secrets 读，连口令都不落在仓库里。
 *.jks
 *.keystore
 keystore.properties
 secrets.properties
+
+# 唯一的例外：固定的**调试**密钥。它是公开密钥（口令就是 Android 约定的
+# android / android），提交它只为让每次 CI 构建的签名一致，从而能直接覆盖安装，
+# 而不是「每次更新都要先卸载」。理由与风险见 app/build.gradle.kts 的 signingConfigs。
+!app/debug.keystore
 
 # ---- 图标生成脚本的临时依赖（tools/generate_icons.mjs 用）-------------------
 node_modules/
