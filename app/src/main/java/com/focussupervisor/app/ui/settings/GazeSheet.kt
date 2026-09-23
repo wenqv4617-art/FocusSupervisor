@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.focussupervisor.app.domain.model.GazeState
+import com.focussupervisor.app.domain.model.VisionConfig
 import com.focussupervisor.app.domain.model.VisionStatus
 import com.focussupervisor.app.ui.theme.FocusTheme
 
@@ -329,6 +330,7 @@ private fun GazeContent(
                 label = "看图时问它什么",
                 value = uiState.draft.prompt,
                 onValueChange = onPromptChange,
+                placeholder = VisionConfig.DEFAULT_PROMPT,
                 singleLine = false,
                 minHeight = 90,
                 footer = "回答会被写进时间线，再进入 AI 的上下文。所以要求它一句话说清事实，" +

@@ -280,6 +280,7 @@ class GazeViewModel(application: Application) : AndroidViewModel(application) {
                 baseUrl = draft.baseUrl,
                 apiKey = draft.apiKey,
                 model = draft.model,
+                temperature = AiConfig.DEFAULT_TEMPERATURE,
             )
             val result = client.testConnection(probe)
             _uiState.update {
