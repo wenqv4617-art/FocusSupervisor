@@ -96,8 +96,13 @@ class ConversationEngine(
         val text = userText.trim()
         if (text.isEmpty()) return SendOutcome.Sent
 
+        // 阶段标记。整条链路跨了五个仓库、九个步骤，一旦出事，光看异常类型
+        // 根本不知道该往哪查。把它带上，界面上那条胶囊就直接指出了出问题的环节。
+        var phase = "准备"
+
         try {
             // ---- 1. 用户消息先落库。哪怕后面网络失败，这句话也已经记下来了。----
+            phase = "保存消息"
             conversation.append(
                 ChatMessage(
                     id = newId(MessageSender.USER),
@@ -108,21 +113,25 @@ class ConversationEngine(
             )
 
             // ---- 2. 端点配置 ----
+            phase = "读取端点配置"
             val config = aiConfig.activeConfigNow()
             if (!config.isUsable) {
                 return fail("还没有配置 AI 端点。打开「+」→「AI 配置」填好地址与模型再试。")
             }
 
             // ---- 3. 召回记忆 ----
+            phase = "读取向量配置"
             val embeddingConfig = aiConfig.embeddingConfigNow()
             val queryEmbedding = if (embeddingConfig.isUsable) {
                 client.embed(embeddingConfig, listOf(text)).getOrNull()?.firstOrNull()
             } else {
                 null
             }
+            phase = "召回记忆"
             val recalled = memory.recall(queryText = text, queryEmbedding = queryEmbedding)
 
             // ---- 4. 组装提示词 ----
+            phase = "组装提示词"
             val now = clock()
             val systemPrompt = PromptAssembler.buildSystemPrompt(
                 prePrompt = config.prePrompt,
@@ -142,6 +151,7 @@ class ConversationEngine(
             )
 
             // ---- 5. 调模型 ----
+            phase = "调用模型"
             val reply = client.chat(config, turns).getOrElse { throwable ->
                 return fail(
                     throwable.message?.takeIf { it.isNotBlank() } ?: "请求模型失败",
@@ -149,6 +159,7 @@ class ConversationEngine(
             }
 
             // ---- 6. 解析指令 ----
+            phase = "解析回复"
             val parsed = AiCommandParser.parse(reply)
 
             val visible = parsed.visibleText.ifBlank {
@@ -167,9 +178,11 @@ class ConversationEngine(
             )
 
             // ---- 7. 执行指令 ----
+            phase = "执行指令"
             parsed.commands.forEach { command -> execute(command) }
 
             // ---- 8. 索引。不涉及网络，随手做掉；向量留给后台补。----
+            phase = "更新记忆索引"
             memory.syncIndex()
 
             return SendOutcome.Sent
@@ -177,8 +190,8 @@ class ConversationEngine(
             throw e
         } catch (t: Throwable) {
             // 走到这里说明有个我们没预料到的异常。它绝不能冒到界面上变成崩溃。
-            Log.e(TAG, "对话链路异常", t)
-            return fail(describeUnexpected(t))
+            Log.e(TAG, "对话链路异常（阶段：$phase）", t)
+            return fail("[$phase] ${describeUnexpected(t)}")
         }
     }
 
