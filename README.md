@@ -20,52 +20,106 @@ AI 监督自律 App。当前处于**阶段七**：AI 有了「主动人格」—
 
 ## 交付物一览
 
-| 交付项 | 位置 |
+路径全部相对仓库根，逐条核对过存在性。
+
+### 构建与交付
+
+| 交付项 | 路径 |
 | --- | --- |
-| GitHub Actions 自动打包 debug APK | `.github/workflows/build_apk.yml` |
-| 权限与组件声明、包可见性 `<queries>` | `app/src/main/AndroidManifest.xml` |
-| 领域契约：会话模型 | `domain/model/ChatModel.kt` |
-| 领域契约：待办 / 豁免 / 权限 / 播报 | `domain/model/PolicyModels.kt` |
-| 策略仓库接口（同步判定 + Flow 暴露 + 播报通道） | `data/repository/AppPolicyRepository.kt` |
-| 策略仓库的 DataStore 实现 | `data/repository/DataStoreAppPolicyRepository.kt` |
-| Preferences DataStore 读写与 JSON 编解码 | `data/datastore/AppPreferencesDataSource.kt` |
-| AI 配置仓库（预设 / 选中项 / 生效配置） | `data/repository/AiConfigRepository.kt` |
-| OpenAI 兼容客户端（拉模型 / 测连接） | `core/network/OpenAiCompatibleClient.kt` |
-| AI 端点与预设的领域契约 | `domain/model/AiConfigModels.kt` |
-| AI 配置中心（ModalBottomSheet） | `ui/settings/AiConfigSheet.kt` |
-| 配置中心的 ViewModel | `ui/settings/AiConfigViewModel.kt` |
-| 依赖容器（手写 Service Locator） | `core/AppContainer.kt` |
-| 权限检查与系统设置跳转 | `core/permission/PermissionManager.kt` |
-| 全屏防沉迷遮罩 | `ui/overlay/LockOverlayController.kt` |
-| 无障碍服务拦截闭环 | `service/FocusAccessibilityService.kt` |
-| 消息气泡与系统胶囊 | `ui/components/MessageBubbles.kt` |
-| 底部「+」功能面板 | `ui/components/PlusActionPanel.kt` |
-| 权限 / 待办与白名单面板 | `ui/components/PolicyDialogs.kt` |
-| 仿微信聊天主界面 | `ui/chat/ChatScreen.kt` |
-| 状态持有者（service ↔ UI 的唯一汇合点） | `ui/chat/ChatViewModel.kt` |
-| 对话编排（提示词 → 模型 → 指令 → 上屏） | `core/ai/ConversationEngine.kt` |
-| 提示词组装（前置提示 / 人设 / 记忆 / 待办 / 白名单 / 近况 / 时间） | `core/ai/PromptAssembler.kt` |
-| AI 指令协议解析 | `core/ai/AiCommandParser.kt` |
-| 向量与关键词打分 | `core/ai/TextVectorizer.kt` |
-| 人设仓库（含头像落盘） | `data/repository/PersonaRepository.kt` |
-| 对话仓库 | `data/repository/ConversationRepository.kt` |
-| 记忆仓库（三层 + 提升 + 向量索引） | `data/repository/MemoryRepository.kt` |
-| 人设 / 记忆管理面板 | `ui/settings/PersonaSheet.kt`、`ui/settings/MemorySheet.kt` |
-| 领域契约：监督时间线 | `domain/model/TimelineModels.kt` |
-| 时间线仓库（投递即返回的写入 + DataStore 持久化） | `data/repository/TimelineRepository.kt` |
-| 时间叙述器（相对时间 / 日历天 / 时段 / 今日统计） | `core/time/TimeNarrator.kt` |
-| 时间线面板（按天分组） | `ui/settings/TimelineSheet.kt` |
-| 领域契约：注视监控 | `domain/model/GazeModels.kt` |
-| 注视判定状态机（纯 Kotlin，可单测） | `core/vision/GazeEstimator.kt` |
-| CameraX + ML Kit 取帧分析 | `core/vision/GazeAnalyzer.kt` |
-| 截屏能力通道（无障碍 → 注视监控） | `core/vision/ScreenCaptureProvider.kt` |
-| 注视监控仓库（配置落盘 + 运行期状态） | `data/repository/GazeRepository.kt` |
-| 注视监控前台服务 | `service/FocusMonitorService.kt` |
-| 注视监控面板 | `ui/settings/GazeSheet.kt`、`ui/settings/GazeViewModel.kt` |
-| 主动盘问引擎（触发 → 闸门 → 开口） | `core/ai/ProactiveSupervisor.kt` |
-| 主动提醒的触达（通知 + 震动） | `core/notify/ProactiveNotifier.kt` |
-| **固定的签名密钥**（公开的调试密钥，见「签名」一节） | `app/debug.keystore` |
+| 自动打包 debug APK（带签名校验，指纹打进日志） | `.github/workflows/build_apk.yml` |
+| 模块配置：签名、abiFilters、依赖 | `app/build.gradle.kts` |
+| 全工程唯一的版本号来源 | `gradle/libs.versions.toml` |
+| 固定的调试签名密钥（公开，只为让覆盖安装可用） | `app/debug.keystore` |
+| 权限、组件、包可见性 `<queries>` | `app/src/main/AndroidManifest.xml` |
+| 无障碍运行期配置（含 canTakeScreenshot） | `app/src/main/res/xml/accessibility_service_config.xml` |
+| 只放行回环地址的明文 HTTP | `app/src/main/res/xml/network_security_config.xml` |
 | 启动图标生成器 | `tools/generate_icons.mjs` |
+
+### 领域契约（纯 Kotlin，不依赖 Android 框架）
+
+| 交付项 | 路径 |
+| --- | --- |
+| 会话与界面状态模型 | `app/src/main/java/com/focussupervisor/app/domain/model/ChatModel.kt` |
+| 待办 / 豁免 / 权限 / 播报 | `app/src/main/java/com/focussupervisor/app/domain/model/PolicyModels.kt` |
+| 对话 / 向量 / 视觉三份独立端点配置 | `app/src/main/java/com/focussupervisor/app/domain/model/AiConfigModels.kt` |
+| AI 结构化指令与上限 | `app/src/main/java/com/focussupervisor/app/domain/model/AiCommand.kt` |
+| 记忆三层、召回结果、向量索引文档 | `app/src/main/java/com/focussupervisor/app/domain/model/MemoryModels.kt` |
+| AI 与用户的人设 | `app/src/main/java/com/focussupervisor/app/domain/model/PersonaModels.kt` |
+| 监督时间线的事件类型与容量取舍 | `app/src/main/java/com/focussupervisor/app/domain/model/TimelineModels.kt` |
+| 注视监控配置与 VisionStatus | `app/src/main/java/com/focussupervisor/app/domain/model/GazeModels.kt` |
+
+### 数据层
+
+| 交付项 | 路径 |
+| --- | --- |
+| Preferences DataStore 的进程内唯一入口 | `app/src/main/java/com/focussupervisor/app/data/datastore/AppPreferencesDataSource.kt` |
+| 全部 JSON 编解码（向量为量化 + Base64） | `app/src/main/java/com/focussupervisor/app/data/datastore/PreferencesCodec.kt` |
+| 策略仓库接口（同步判定 + Flow + 播报） | `app/src/main/java/com/focussupervisor/app/data/repository/AppPolicyRepository.kt` |
+| 策略仓库实现（内存快照，供主线程同步读） | `app/src/main/java/com/focussupervisor/app/data/repository/DataStoreAppPolicyRepository.kt` |
+| 端点配置仓库（对话 / 向量 / 视觉） | `app/src/main/java/com/focussupervisor/app/data/repository/AiConfigRepository.kt` |
+| 对话仓库（含改写与删除留痕） | `app/src/main/java/com/focussupervisor/app/data/repository/ConversationRepository.kt` |
+| 记忆仓库（三层 + 提升 + 向量索引） | `app/src/main/java/com/focussupervisor/app/data/repository/MemoryRepository.kt` |
+| 人设仓库（含头像落盘） | `app/src/main/java/com/focussupervisor/app/data/repository/PersonaRepository.kt` |
+| 监督时间线仓库（投递即返回的写入） | `app/src/main/java/com/focussupervisor/app/data/repository/TimelineRepository.kt` |
+| 注视监控仓库（配置落盘 + 运行期状态） | `app/src/main/java/com/focussupervisor/app/data/repository/GazeRepository.kt` |
+| 最近一次请求的缓存命中情况（纯内存） | `app/src/main/java/com/focussupervisor/app/data/repository/PromptCacheRepository.kt` |
+| 设备关键应用与桌面/输入法的运行时解析 | `app/src/main/java/com/focussupervisor/app/data/repository/CriticalPackages.kt` |
+| 首次启动的开场白（唯一一处示例内容） | `app/src/main/java/com/focussupervisor/app/data/mock/MockChatData.kt` |
+
+### 能力层（core）
+
+| 交付项 | 路径 |
+| --- | --- |
+| 手写 Service Locator + 后台任务编排 | `app/src/main/java/com/focussupervisor/app/core/AppContainer.kt` |
+| 对话编排；也承载主动盘问的模型调用 | `app/src/main/java/com/focussupervisor/app/core/ai/ConversationEngine.kt` |
+| 提示词组装：稳定段 + 每轮状态段（为前缀缓存而分） | `app/src/main/java/com/focussupervisor/app/core/ai/PromptAssembler.kt` |
+| 指令协议解析（手写扫描，不用正则） | `app/src/main/java/com/focussupervisor/app/core/ai/AiCommandParser.kt` |
+| 向量相似度与关键词兜底打分 | `app/src/main/java/com/focussupervisor/app/core/ai/TextVectorizer.kt` |
+| 主动盘问引擎：触发 → 闸门 → 开口 | `app/src/main/java/com/focussupervisor/app/core/ai/ProactiveSupervisor.kt` |
+| OpenAI 兼容客户端（对话 / 向量 / 视觉 / 缓存统计） | `app/src/main/java/com/focussupervisor/app/core/network/OpenAiCompatibleClient.kt` |
+| 权限状态检查与系统设置跳转 | `app/src/main/java/com/focussupervisor/app/core/permission/PermissionManager.kt` |
+| 时间叙述器与日历天判据 dayKey | `app/src/main/java/com/focussupervisor/app/core/time/TimeNarrator.kt` |
+| 注视判定状态机（纯 Kotlin，可单测） | `app/src/main/java/com/focussupervisor/app/core/vision/GazeEstimator.kt` |
+| CameraX + ML Kit 取帧分析 | `app/src/main/java/com/focussupervisor/app/core/vision/GazeAnalyzer.kt` |
+| 截屏能力通道（无障碍 → 注视监控） | `app/src/main/java/com/focussupervisor/app/core/vision/ScreenCaptureProvider.kt` |
+| 主动提醒的触达（通知 + 震动） | `app/src/main/java/com/focussupervisor/app/core/notify/ProactiveNotifier.kt` |
+
+### 系统服务
+
+| 交付项 | 路径 |
+| --- | --- |
+| 拦截执行端（含小窗/画中画判定与截屏能力） | `app/src/main/java/com/focussupervisor/app/service/FocusAccessibilityService.kt` |
+| 注视监控前台服务（camera 类型） | `app/src/main/java/com/focussupervisor/app/service/FocusMonitorService.kt` |
+
+### 界面层
+
+| 交付项 | 路径 |
+| --- | --- |
+| Application：容器与通知渠道 | `app/src/main/java/com/focussupervisor/app/FocusSupervisorApp.kt` |
+| 唯一的 Activity | `app/src/main/java/com/focussupervisor/app/MainActivity.kt` |
+| 仿微信聊天主界面（无状态） | `app/src/main/java/com/focussupervisor/app/ui/chat/ChatScreen.kt` |
+| 状态持有者（service ↔ UI 的唯一汇合点） | `app/src/main/java/com/focussupervisor/app/ui/chat/ChatViewModel.kt` |
+| 长按消息的操作 / 编辑 / 删除面板 | `app/src/main/java/com/focussupervisor/app/ui/chat/MessageActionSheets.kt` |
+| 消息气泡与系统胶囊（都带时间） | `app/src/main/java/com/focussupervisor/app/ui/components/MessageBubbles.kt` |
+| 底部「+」面板（9 个入口） | `app/src/main/java/com/focussupervisor/app/ui/components/PlusActionPanel.kt` |
+| 权限检查 / 待办与白名单面板 | `app/src/main/java/com/focussupervisor/app/ui/components/PolicyDialogs.kt` |
+| 头像组件 | `app/src/main/java/com/focussupervisor/app/ui/components/Avatar.kt` |
+| 面板通用组件（标题 / 分组卡片 / 输入 / 按钮） | `app/src/main/java/com/focussupervisor/app/ui/settings/SheetComponents.kt` |
+| AI 配置中心 | `app/src/main/java/com/focussupervisor/app/ui/settings/AiConfigSheet.kt` |
+| AI 配置的状态与缓存命中显示 | `app/src/main/java/com/focussupervisor/app/ui/settings/AiConfigViewModel.kt` |
+| 向量模型（独立配置） | `app/src/main/java/com/focussupervisor/app/ui/settings/EmbeddingSheet.kt` |
+| 向量模型配置的状态 | `app/src/main/java/com/focussupervisor/app/ui/settings/EmbeddingViewModel.kt` |
+| 人设管理 | `app/src/main/java/com/focussupervisor/app/ui/settings/PersonaSheet.kt` |
+| 人设的状态与头像选择 | `app/src/main/java/com/focussupervisor/app/ui/settings/PersonaViewModel.kt` |
+| 记忆管理 | `app/src/main/java/com/focussupervisor/app/ui/settings/MemorySheet.kt` |
+| 记忆的状态与增删改 | `app/src/main/java/com/focussupervisor/app/ui/settings/MemoryViewModel.kt` |
+| 时间线面板（按天分组） | `app/src/main/java/com/focussupervisor/app/ui/settings/TimelineSheet.kt` |
+| 注视监控面板 | `app/src/main/java/com/focussupervisor/app/ui/settings/GazeSheet.kt` |
+| 注视监控的状态与拉取模型 | `app/src/main/java/com/focussupervisor/app/ui/settings/GazeViewModel.kt` |
+| 全屏防沉迷遮罩 | `app/src/main/java/com/focussupervisor/app/ui/overlay/LockOverlayController.kt` |
+| 消息与待办的时间格式（跨天补日期） | `app/src/main/java/com/focussupervisor/app/ui/util/TimeFormat.kt` |
+
+---
 
 ## 技术栈
 
@@ -250,7 +304,7 @@ EncryptedSharedPreferences 依赖 Android Keystore，而它在部分定制 ROM �
 并在界面上明确告知。
 
 **关于明文 HTTP**：只放行 `127.0.0.1` / `localhost` / `10.0.2.2` 三个回环地址
-（见 `res/xml/network_security_config.xml`），云端端点必须走 HTTPS。局域网里的
+（见 `app/src/main/res/xml/network_security_config.xml`），云端端点必须走 HTTPS。局域网里的
 `http://192.168.x.x` 不在放行之列。
 
 ## AI 怎么真的做事
@@ -345,7 +399,7 @@ EncryptedSharedPreferences 依赖 Android Keystore，而它在部分定制 ROM �
 另外**每一轮对话消息前面都会加上 `[MM-dd HH:mm]`**。没有这一层，整段历史在模型
 眼里就是「刚刚连续发生的」，它会把三天前的一句抱怨当成当下的情绪。
 
-时间说法由 `core/time/TimeNarrator.kt` 统一生成，提示词和界面共用同一套规则 ——
+时间说法由 `app/src/main/java/com/focussupervisor/app/core/time/TimeNarrator.kt` 统一生成，提示词和界面共用同一套规则 ——
 否则会出现「界面上说 3 分钟前、AI 以为隔了一小时」这种对不上的情况。
 
 ### 用户能看到什么
