@@ -6,6 +6,8 @@ import com.focussupervisor.app.domain.model.AiPersona
 import com.focussupervisor.app.domain.model.AiPreset
 import com.focussupervisor.app.domain.model.ChatMessage
 import com.focussupervisor.app.domain.model.EmbeddingConfig
+import com.focussupervisor.app.domain.model.GazeConfig
+import com.focussupervisor.app.domain.model.GazeDefaults
 import com.focussupervisor.app.domain.model.IndexedDocKind
 import com.focussupervisor.app.domain.model.IndexedDocument
 import com.focussupervisor.app.domain.model.MemoryEntry
@@ -17,6 +19,7 @@ import com.focussupervisor.app.domain.model.TimelineEvent
 import com.focussupervisor.app.domain.model.TimelineKind
 import com.focussupervisor.app.domain.model.TodoItem
 import com.focussupervisor.app.domain.model.UserPersona
+import com.focussupervisor.app.domain.model.VisionConfig
 import com.focussupervisor.app.domain.model.WhitelistApp
 import org.json.JSONArray
 import java.util.Base64
@@ -178,6 +181,76 @@ internal object PreferencesCodec {
             baseUrl = obj.optString(FIELD_BASE_URL),
             apiKey = obj.optString(FIELD_API_KEY),
             model = obj.optString(FIELD_MODEL),
+        )
+    }
+
+    // =======================================================================
+    // 视觉模型配置
+    // =======================================================================
+
+    fun encodeVisionConfig(config: VisionConfig): String = JSONObject().apply {
+        put(FIELD_BASE_URL, config.baseUrl)
+        put(FIELD_API_KEY, config.apiKey)
+        put(FIELD_MODEL, config.model)
+        put(FIELD_PROMPT, config.prompt)
+    }.toString()
+
+    fun decodeVisionConfig(json: String?): VisionConfig {
+        if (json.isNullOrBlank()) return VisionConfig()
+        val obj = runCatching { JSONObject(json) }.getOrNull() ?: return VisionConfig()
+        return VisionConfig(
+            baseUrl = obj.optString(FIELD_BASE_URL),
+            apiKey = obj.optString(FIELD_API_KEY),
+            model = obj.optString(FIELD_MODEL),
+            // 空提问退回默认：空提问会让模型收到一张图却不知道该回答什么，
+            // 得到的往往是「这是一张手机截图」这种零信息量的废话。
+            prompt = obj.optString(FIELD_PROMPT).ifBlank { VisionConfig.DEFAULT_PROMPT },
+        )
+    }
+
+    // =======================================================================
+    // 注视监控
+    // =======================================================================
+
+    fun encodeGazeConfig(config: GazeConfig): String = JSONObject().apply {
+        put(FIELD_ENABLED, config.enabled)
+        put(FIELD_UPLOAD_SCREENSHOTS, config.uploadScreenshots)
+        put(FIELD_ANALYZE_INTERVAL, config.analyzeIntervalMillis)
+        put(FIELD_LOOK_HOLD, config.lookHoldMillis)
+        put(FIELD_AWAY_HOLD, config.awayHoldMillis)
+        put(FIELD_CAPTURE_COOLDOWN, config.captureCooldownMillis)
+        put(FIELD_YAW, config.yawToleranceDegrees.toDouble())
+        put(FIELD_PITCH, config.pitchToleranceDegrees.toDouble())
+        put(FIELD_EYE_OPEN, config.eyeOpenThreshold.toDouble())
+    }.toString()
+
+    /**
+     * 解析注视监控配置。
+     *
+     * 每个数值都夹到合法区间里再返回，而不是直接信任磁盘上的内容：这些值直接决定
+     * 抽帧频率与摄像头占用，被改成一个荒谬的数（比如间隔 1 毫秒）会立刻变成
+     * 耗电与发热问题。夹取放在解析处，调用方就不必各自记得校验。
+     */
+    fun decodeGazeConfig(json: String?): GazeConfig {
+        val defaults = GazeConfig()
+        if (json.isNullOrBlank()) return defaults
+
+        val obj = runCatching { JSONObject(json) }.getOrNull() ?: return defaults
+        return GazeConfig(
+            enabled = obj.optBoolean(FIELD_ENABLED, defaults.enabled),
+            uploadScreenshots = obj.optBoolean(FIELD_UPLOAD_SCREENSHOTS, defaults.uploadScreenshots),
+            analyzeIntervalMillis = obj.optLong(FIELD_ANALYZE_INTERVAL, defaults.analyzeIntervalMillis)
+                .coerceAtLeast(GazeDefaults.MIN_ANALYZE_INTERVAL_MILLIS),
+            lookHoldMillis = obj.optLong(FIELD_LOOK_HOLD, defaults.lookHoldMillis).coerceAtLeast(0L),
+            awayHoldMillis = obj.optLong(FIELD_AWAY_HOLD, defaults.awayHoldMillis).coerceAtLeast(0L),
+            captureCooldownMillis = obj.optLong(FIELD_CAPTURE_COOLDOWN, defaults.captureCooldownMillis)
+                .coerceAtLeast(0L),
+            yawToleranceDegrees = obj.optDouble(FIELD_YAW, defaults.yawToleranceDegrees.toDouble())
+                .toFloat().coerceIn(MIN_TOLERANCE_DEGREES, MAX_TOLERANCE_DEGREES),
+            pitchToleranceDegrees = obj.optDouble(FIELD_PITCH, defaults.pitchToleranceDegrees.toDouble())
+                .toFloat().coerceIn(MIN_TOLERANCE_DEGREES, MAX_TOLERANCE_DEGREES),
+            eyeOpenThreshold = obj.optDouble(FIELD_EYE_OPEN, defaults.eyeOpenThreshold.toDouble())
+                .toFloat().coerceIn(0f, 1f),
         )
     }
 
@@ -498,4 +571,18 @@ internal object PreferencesCodec {
     private const val FIELD_TEXT = "text"
     private const val FIELD_AT = "atMillis"
     private const val FIELD_DETAIL = "detail"
+    private const val FIELD_PROMPT = "prompt"
+    private const val FIELD_ENABLED = "enabled"
+    private const val FIELD_UPLOAD_SCREENSHOTS = "uploadScreenshots"
+    private const val FIELD_ANALYZE_INTERVAL = "analyzeIntervalMillis"
+    private const val FIELD_LOOK_HOLD = "lookHoldMillis"
+    private const val FIELD_AWAY_HOLD = "awayHoldMillis"
+    private const val FIELD_CAPTURE_COOLDOWN = "captureCooldownMillis"
+    private const val FIELD_YAW = "yawToleranceDegrees"
+    private const val FIELD_PITCH = "pitchToleranceDegrees"
+    private const val FIELD_EYE_OPEN = "eyeOpenThreshold"
+
+    /** 头部姿态容差的合法区间：小于 5 度几乎永远判不成注视，大于 45 度等于没判。 */
+    private const val MIN_TOLERANCE_DEGREES = 5f
+    private const val MAX_TOLERANCE_DEGREES = 45f
 }

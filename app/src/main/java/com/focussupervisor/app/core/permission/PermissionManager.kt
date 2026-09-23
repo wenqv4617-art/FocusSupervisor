@@ -1,9 +1,11 @@
 package com.focussupervisor.app.core.permission
 
+import android.Manifest
 import android.app.AppOpsManager
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
@@ -11,6 +13,7 @@ import android.os.Process
 import android.provider.Settings
 import android.util.Log
 import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
 import com.focussupervisor.app.domain.model.PermissionStatus
 import com.focussupervisor.app.domain.model.PermissionTarget
 import com.focussupervisor.app.service.FocusAccessibilityService
@@ -31,6 +34,18 @@ class PermissionManager(private val context: Context) {
     private val appContext: Context = context.applicationContext
 
     /**
+     * 摄像头权限是否已授予。
+     *
+     * 单独一个方法，而不是塞进 [PermissionTarget]：它不是一个「去设置页开一下」的
+     * 系统开关，而是标准运行时权限，要用系统对话框申请，交互方式与其它几项不同。
+     * 对注视监控来说它是**硬前提** —— Android 14 起 camera 类型的前台服务必须有它，
+     * 否则连前台态都进不去。这里不缓存，理由同 [snapshot]。
+     */
+    fun hasCameraPermission(): Boolean =
+        ContextCompat.checkSelfPermission(appContext, Manifest.permission.CAMERA) ==
+            PackageManager.PERMISSION_GRANTED
+
+    /**
      * 采集一份完整快照。
      *
      * 每次调用都真查一遍，不做缓存 —— 用户可能刚刚从设置页回来，缓存会让界面
@@ -48,8 +63,7 @@ class PermissionManager(private val context: Context) {
     }
 
     /** 某一项权限此刻是否已授予。 */
-    fun isGranted(target: PermissionTarget): Boolean = when (target) {
-        PermissionTarget.ACCESSIBILITY -> FocusAccessibilityService.isEnabled(appContext)
+    fun isGranted(target: PermissionTarget): Boolean = when (target) {        PermissionTarget.ACCESSIBILITY -> FocusAccessibilityService.isEnabled(appContext)
 
         PermissionTarget.OVERLAY -> Settings.canDrawOverlays(appContext)
 

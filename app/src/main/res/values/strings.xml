@@ -10,5 +10,15 @@
     <string name="monitor_notification_channel_name">监督服务</string>
     <string name="monitor_notification_channel_description">保持监督能力在后台运行的常驻通知</string>
     <string name="monitor_notification_title">FocusSupervisor 正在监督</string>
-    <string name="monitor_notification_text">视线感知与使用时长统计已就绪</string>
+    <!--
+      通知正文跟着注视监控的实际状态走。这不是为了好看：Android 12+ 在摄像头被使用
+      时会在状态栏亮一个绿点，用户唯一能确认「它在干什么」的地方就是这条通知。
+      只写「正在监督」等于让用户自己去猜。
+    -->
+    <string name="monitor_notification_text_off">注视监控已暂停</string>
+    <string name="monitor_notification_text_starting">正在启动摄像头…</string>
+    <string name="monitor_notification_text_no_face">摄像头工作中 · 画面里没有人</string>
+    <string name="monitor_notification_text_away">摄像头工作中 · 人在，但没看屏幕</string>
+    <string name="monitor_notification_text_looking">摄像头工作中 · 正在注视屏幕</string>
+    <string name="monitor_notification_text_error">注视监控出错，已暂停</string>
 </resources>

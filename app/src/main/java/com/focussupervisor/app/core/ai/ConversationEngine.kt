@@ -5,6 +5,7 @@ import com.focussupervisor.app.core.network.OpenAiCompatibleClient
 import com.focussupervisor.app.data.repository.AiConfigRepository
 import com.focussupervisor.app.data.repository.AppPolicyRepository
 import com.focussupervisor.app.data.repository.ConversationRepository
+import com.focussupervisor.app.data.repository.GazeRepository
 import com.focussupervisor.app.data.repository.MemoryRepository
 import com.focussupervisor.app.data.repository.PersonaRepository
 import com.focussupervisor.app.data.repository.PromptCacheRepository
@@ -75,6 +76,7 @@ class ConversationEngine(
     private val aiConfig: AiConfigRepository,
     private val timeline: TimelineRepository,
     private val cache: PromptCacheRepository,
+    private val gaze: GazeRepository,
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
 
@@ -163,6 +165,7 @@ class ConversationEngine(
                 todos = policy.todos.value,
                 whitelist = policy.whitelist.value,
                 timeline = timeline.events.value,
+                vision = gaze.status.value,
                 history = history,
                 lastInteractionMillis = previousUserMessageMillis,
                 nowMillis = now,

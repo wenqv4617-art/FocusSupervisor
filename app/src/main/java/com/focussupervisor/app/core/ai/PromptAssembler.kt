@@ -5,6 +5,7 @@ import com.focussupervisor.app.core.network.ChatTurn
 import com.focussupervisor.app.domain.model.AiCommandLimits
 import com.focussupervisor.app.domain.model.AiPersona
 import com.focussupervisor.app.domain.model.ChatMessage
+import com.focussupervisor.app.domain.model.GazeState
 import com.focussupervisor.app.domain.model.MemoryEntry
 import com.focussupervisor.app.domain.model.MessageSender
 import com.focussupervisor.app.domain.model.PersonaPair
@@ -12,6 +13,7 @@ import com.focussupervisor.app.domain.model.TimelineDefaults
 import com.focussupervisor.app.domain.model.TimelineEvent
 import com.focussupervisor.app.domain.model.TodoItem
 import com.focussupervisor.app.domain.model.UserPersona
+import com.focussupervisor.app.domain.model.VisionStatus
 import com.focussupervisor.app.domain.model.WhitelistApp
 import java.time.Instant
 import java.time.ZoneId
@@ -154,6 +156,7 @@ object PromptAssembler {
         todos: List<TodoItem>,
         whitelist: List<WhitelistApp>,
         timeline: List<TimelineEvent>,
+        vision: VisionStatus?,
         history: List<ChatMessage>,
         lastInteractionMillis: Long?,
         nowMillis: Long,
@@ -200,6 +203,9 @@ object PromptAssembler {
 
         // ---- 最近发生的事 ----
         appendSituationSection(timeline, nowMillis)
+
+        // ---- 摄像头此刻看到的 ----
+        appendVisionSection(vision)
 
         // ---- 现在 ----
         appendTimeSection(history, timeline, lastInteractionMillis, nowMillis)
@@ -315,6 +321,39 @@ object PromptAssembler {
         recent.forEach { event ->
             appendLine("- ${TimeNarrator.describeForPrompt(event, nowMillis)}")
         }
+        appendLine()
+    }
+
+    /**
+     * 摄像头此刻看到的状态。
+     *
+     * 这是时间线之外、**唯一一个描述「他现在在不在」**的信息。之前的上下文里
+     * 全是「他做了什么」，AI 因此只能对着一个可能早就走开的人说话。
+     *
+     * 没开注视监控时整段省略 —— 缺省不是「他没在看」，而是「我们不知道」，
+     * 这两件事在提示词里必须区分清楚，否则 AI 会凭空断言他离开了。
+     */
+    private fun StringBuilder.appendVisionSection(vision: VisionStatus?) {
+        if (vision == null || vision.state == GazeState.OFF) return
+
+        val detail = buildString {
+            if (vision.continuousFocusMillis > 0L) {
+                append("本轮已连续 ${vision.continuousFocusMillis / 60_000L} 分钟")
+            }
+            if (vision.todayFocusMillis > 0L) {
+                if (isNotEmpty()) append(" · ")
+                append("今天累计 ${vision.todayFocusMillis / 60_000L} 分钟")
+            }
+        }
+
+        appendLine("# 摄像头此刻看到的")
+        append(
+            if (detail.isEmpty()) {
+                "- ${vision.state.label}\n"
+            } else {
+                "- ${vision.state.label}（$detail）\n"
+            },
+        )
         appendLine()
     }
 

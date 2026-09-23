@@ -13,9 +13,11 @@ import com.focussupervisor.app.data.repository.DataStoreAiConfigRepository
 import com.focussupervisor.app.data.repository.ConversationRepository
 import com.focussupervisor.app.data.repository.DataStoreAppPolicyRepository
 import com.focussupervisor.app.data.repository.DataStoreConversationRepository
+import com.focussupervisor.app.data.repository.DataStoreGazeRepository
 import com.focussupervisor.app.data.repository.DataStoreMemoryRepository
 import com.focussupervisor.app.data.repository.DataStorePersonaRepository
 import com.focussupervisor.app.data.repository.DataStoreTimelineRepository
+import com.focussupervisor.app.data.repository.GazeRepository
 import com.focussupervisor.app.data.repository.InMemoryPromptCacheRepository
 import com.focussupervisor.app.data.repository.MemoryRepository
 import com.focussupervisor.app.data.repository.PersonaRepository
@@ -117,6 +119,17 @@ class AppContainer(context: Context) {
         timeline = timeline,
     )
 
+    /**
+     * 注视监控：配置（落盘）+ 运行期状态（内存）。
+     *
+     * 由前台服务 [com.focussupervisor.app.service.FocusMonitorService] 写状态、
+     * 由界面读；配置反过来：界面写，服务读。
+     */
+    val gaze: GazeRepository = DataStoreGazeRepository(
+        preferences = preferences,
+        scope = appScope,
+    )
+
     /** 权限状态检查与系统设置跳转。 */
     val permissions: PermissionManager = PermissionManager(appContext)
 
@@ -157,6 +170,8 @@ class AppContainer(context: Context) {
         personas = personas,
         aiConfig = aiConfig,
         timeline = timeline,
+        cache = promptCache,
+        gaze = gaze,
     )
 
     init {

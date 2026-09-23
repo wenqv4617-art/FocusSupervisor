@@ -147,10 +147,19 @@ dependencies {
     implementation(libs.androidx.datastore.preferences)
     implementation(libs.okhttp)
 
+    // ---- 摄像头 / 视觉（注视监控）-------------------------------------------
+    // CameraX 负责取帧，ML Kit 负责人脸与头部姿态。两者都在设备本地跑；
+    // 唯一会离开设备的，是「判定为正在注视」之后主动上传的那一张截图。
+    implementation(libs.androidx.camera.core)
+    implementation(libs.androidx.camera.camera2)
+    implementation(libs.androidx.camera.lifecycle)
+    implementation(libs.mlkit.face.detection)
+
     // ---- 生命周期 / ViewModel ----------------------------------------------
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.runtime.compose)   // collectAsStateWithLifecycle
     implementation(libs.androidx.lifecycle.viewmodel.compose) // viewModel()
+    implementation(libs.androidx.lifecycle.service)           // LifecycleService
 
     // ---- Compose -----------------------------------------------------------
     implementation(platform(libs.androidx.compose.bom))
@@ -163,7 +172,6 @@ dependencies {
 
     // @Preview 只在 debug 变体里需要，不污染正式包。
     debugImplementation(libs.androidx.compose.ui.tooling)
-
     // ---- 测试 --------------------------------------------------------------
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

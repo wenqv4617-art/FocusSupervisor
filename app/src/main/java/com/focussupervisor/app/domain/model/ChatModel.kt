@@ -152,6 +152,7 @@ data class ChatUiState(
     val messageEditTarget: ChatMessage? = null,
     val messageDeleteTarget: ChatMessage? = null,
     val isTimelineSheetVisible: Boolean = false,
+    val isGazeSheetVisible: Boolean = false,
     val timelineEvents: List<TimelineEvent> = emptyList(),
     val nowMillis: Long = System.currentTimeMillis(),
 ) {

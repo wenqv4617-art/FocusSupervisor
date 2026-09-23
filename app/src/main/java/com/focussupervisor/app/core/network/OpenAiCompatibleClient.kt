@@ -2,6 +2,7 @@ package com.focussupervisor.app.core.network
 
 import com.focussupervisor.app.domain.model.AiConfig
 import com.focussupervisor.app.domain.model.EmbeddingConfig
+import com.focussupervisor.app.domain.model.VisionConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.withContext
@@ -18,6 +19,7 @@ import java.io.InterruptedIOException
 import java.net.ConnectException
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
+import java.util.Base64
 import java.util.concurrent.TimeUnit
 import javax.net.ssl.SSLException
 import kotlin.coroutines.coroutineContext
@@ -248,6 +250,99 @@ class OpenAiCompatibleClient(
                 val body = response.body?.string().orEmpty()
                 if (response.isSuccessful) {
                     Result.success(parseEmbeddings(body, texts.size))
+                } else {
+                    Result.failure(httpFailure(response.code, body))
+                }
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // 视觉：让模型看一眼屏幕截图
+    // -----------------------------------------------------------------------
+
+    /**
+     * 把一张截图连同提问发给多模态模型，返回它的一句话描述。
+     *
+     * 走的是 OpenAI 的**多模态消息**格式（`content` 从字符串变成一个数组，
+     * 里面既有 `text` 也有 `image_url`）。图片用 data URL 内联 —— 不先上传到某个
+     * 图床，是因为那意味着把用户的屏幕内容交给第三方存储；内联则只有目标端点
+     * 看得见，而且请求结束即消失。
+     *
+     * 体积极小是刻意的：调用方已经把截图压到几十 KB。这一步的 token 成本几乎全部
+     * 由图片决定，压缩比任何提示词技巧都有效。
+     *
+     * @param config 视觉端点配置（**独立于对话端点**，见 [VisionConfig] 的注释）
+     * @param prompt 让模型回答什么
+     * @param jpegBytes 已经压好的 JPEG 字节
+     */
+    suspend fun describeImage(
+        config: VisionConfig,
+        prompt: String,
+        jpegBytes: ByteArray,
+    ): Result<String> {
+        if (!config.isUsable) {
+            return Result.failure(
+                AiClientException("还没有配置视觉模型（「+」→「注视监控」→「视觉模型」）"),
+            )
+        }
+        if (jpegBytes.isEmpty()) {
+            return Result.failure(AiClientException("截图为空，本次跳过"))
+        }
+
+        val roots = candidateRoots(config.baseUrl)
+        if (roots.isEmpty()) {
+            return Result.failure(AiClientException("视觉模型的 Base URL 为空"))
+        }
+
+        val dataUrl = "data:image/jpeg;base64," + Base64.getEncoder().encodeToString(jpegBytes)
+        val payload = JSONObject().apply {
+            put("model", config.model)
+            put("messages", JSONArray().apply {
+                put(
+                    JSONObject().apply {
+                        put("role", "user")
+                        put(
+                            "content",
+                            JSONArray().apply {
+                                put(
+                                    JSONObject().apply {
+                                        put("type", "text")
+                                        put("text", prompt)
+                                    },
+                                )
+                                put(
+                                    JSONObject().apply {
+                                        put("type", "image_url")
+                                        put(
+                                            "image_url",
+                                            JSONObject().apply { put("url", dataUrl) },
+                                        )
+                                    },
+                                )
+                            },
+                        )
+                    },
+                )
+            })
+            // 描述要短。不设上限的话，有些模型会写出一整段分析，
+            // 而这段话最终要塞进时间线、再进对话上下文。
+            put("max_tokens", VISION_MAX_TOKENS)
+            put("stream", false)
+        }.toString()
+
+        return tryWithRoots(roots) { root ->
+            val request = Request.Builder()
+                .url("$root/chat/completions")
+                .applyAuth(config.apiKey)
+                .header("Accept", "application/json")
+                .post(payload.toRequestBody(JSON_MEDIA_TYPE))
+                .build()
+
+            client.newCall(request).executeOrCancel().use { response ->
+                val body = response.body?.string().orEmpty()
+                if (response.isSuccessful) {
+                    Result.success(parseAssistantContent(body).trim())
                 } else {
                     Result.failure(httpFailure(response.code, body))
                 }
@@ -545,6 +640,14 @@ class OpenAiCompatibleClient(
 
         /** 测试请求的最大输出 token 数。1 是很多端点能接受的最小值。 */
         private const val TEST_MAX_TOKENS = 1
+
+        /**
+         * 视觉描述的 token 上限。
+         *
+         * 200 大约是一百多个汉字，足够说清「他在刷短视频」，又不至于让模型写出一篇
+         * 分析报告 —— 那段文字最终要进时间线、再进对话上下文，长了会挤掉别的东西。
+         */
+        private const val VISION_MAX_TOKENS = 200
 
         private const val CONNECT_TIMEOUT_SECONDS = 15L
         private const val READ_TIMEOUT_SECONDS = 60L

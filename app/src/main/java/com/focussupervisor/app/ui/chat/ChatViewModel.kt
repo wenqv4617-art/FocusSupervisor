@@ -63,6 +63,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val conversation = container.conversation
     private val personaRepository = container.personas
     private val timeline = container.timeline
+    private val gaze = container.gaze
     private val engine = container.conversationEngine
 
     private val _uiState = MutableStateFlow(
@@ -163,6 +164,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
             ActionIds.TIMELINE -> openSheet(SheetTarget.TIMELINE)
 
+            ActionIds.GAZE_MONITOR -> openSheet(SheetTarget.GAZE)
+
             ActionIds.AI_CONFIG -> openSheet(SheetTarget.AI_CONFIG)
 
             else -> {
@@ -185,6 +188,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     fun onEmbeddingSheetDismiss() = closeSheet(SheetTarget.EMBEDDING_CONFIG)
 
     fun onTimelineSheetDismiss() = closeSheet(SheetTarget.TIMELINE)
+
+    fun onGazeSheetDismiss() = closeSheet(SheetTarget.GAZE)
 
     /**
      * 清空时间线。
@@ -282,11 +287,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     fun refreshPermissions() {
         val snapshot = permissionManager.snapshot()
+        val gazeNeedsAttention = gaze.config.value?.enabled == true &&
+            !permissionManager.hasCameraPermission()
+
         _uiState.update { state ->
             state.copy(
                 permissions = snapshot,
                 actions = defaultActionItems(
                     needsPermissionAttention = snapshot.any { !it.granted },
+                    needsGazeAttention = gazeNeedsAttention,
                 ),
                 statusText = computeStatusText(snapshot, state.overlayActive),
             )
@@ -460,7 +469,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     // -----------------------------------------------------------------------
 
     /** 三个 BottomSheet 的标识。 */
-    private enum class SheetTarget { AI_CONFIG, PERSONA, MEMORY, EMBEDDING_CONFIG, TIMELINE }
+    private enum class SheetTarget { AI_CONFIG, PERSONA, MEMORY, EMBEDDING_CONFIG, TIMELINE, GAZE }
 
     private fun openDialog(dialog: ChatDialog) {
         _uiState.update {
@@ -483,6 +492,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 isMemorySheetVisible = target == SheetTarget.MEMORY,
                 isEmbeddingSheetVisible = target == SheetTarget.EMBEDDING_CONFIG,
                 isTimelineSheetVisible = target == SheetTarget.TIMELINE,
+                isGazeSheetVisible = target == SheetTarget.GAZE,
             )
         }
     }
@@ -495,6 +505,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 SheetTarget.MEMORY -> it.copy(isMemorySheetVisible = false)
                 SheetTarget.EMBEDDING_CONFIG -> it.copy(isEmbeddingSheetVisible = false)
                 SheetTarget.TIMELINE -> it.copy(isTimelineSheetVisible = false)
+                SheetTarget.GAZE -> it.copy(isGazeSheetVisible = false)
             }
         }
     }

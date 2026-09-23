@@ -189,3 +189,49 @@ data class EmbeddingConfig(
         const val OLLAMA_DEFAULT_MODEL = "nomic-embed-text"
     }
 }
+
+/**
+ * 视觉模型配置。**同样与对话配置完全独立。**
+ *
+ * ===========================================================================
+ * 为什么必须是独立的一份
+ * ===========================================================================
+ * 原因比向量模型更硬：**DeepSeek 的对话模型不接受图片**。用户的主力端点几乎一定
+ * 是 DeepSeek，而注视监控需要「看一眼屏幕截图，说一句他在干什么」这种多模态能力。
+ * 把两者混在一份配置里的唯一后果，就是用户为了用上注视监控而被迫换掉对话模型 ——
+ * 那不是取舍，是功能互斥。
+ *
+ * 所以它独立存储、独立入口、独立页面，用户可以在 DeepSeek 之外再配一家
+ * （通义千问 VL、智谱 GLM-4V、GPT-4o mini，或任何代理了多模态模型的中转站）。
+ *
+ * @param baseUrl 视觉服务的地址。留空表示不做视觉描述 —— 注视监控仍然工作，
+ *        只是不截屏、不产生描述。
+ * @param apiKey 视觉服务的 Key
+ * @param model 视觉模型名，例如 qwen-vl-plus / glm-4v-flash / gpt-4o-mini
+ * @param prompt 让模型看图时回答什么。默认问「他在做什么」，用户可以按自己的
+ *        监督目标改写（例如「他是不是在打游戏」）。
+ */
+data class VisionConfig(
+    val baseUrl: String = "",
+    val apiKey: String = "",
+    val model: String = "",
+    val prompt: String = DEFAULT_PROMPT,
+) {
+    /** 三项都填了才算配置完整。prompt 有默认值，不参与判断。 */
+    val isUsable: Boolean
+        get() = baseUrl.isNotBlank() && model.isNotBlank()
+
+    companion object {
+        /**
+         * 默认提问。
+         *
+         * 措辞刻意约束了长度与格式：回答会被写进时间线、再进 AI 的上下文，
+         * 一段三百字的散文会把整段提示词挤掉。要一句话、要具体、不要评价。
+         */
+        const val DEFAULT_PROMPT: String =
+            "用一句不超过 40 字的中文说明：画面里的人正在做什么（在用什么应用、做什么事）。" +
+                "只描述你看到的事实，不要评价，不要猜测他的想法。"
+
+        const val MAX_PROMPT_LENGTH = 500
+    }
+}

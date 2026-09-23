@@ -66,6 +66,7 @@ import com.focussupervisor.app.ui.components.PolicyStatusDialog
 import com.focussupervisor.app.ui.components.defaultActionItems
 import com.focussupervisor.app.ui.settings.AiConfigSheet
 import com.focussupervisor.app.ui.settings.EmbeddingSheet
+import com.focussupervisor.app.ui.settings.GazeSheet
 import com.focussupervisor.app.ui.settings.MemorySheet
 import com.focussupervisor.app.ui.settings.PersonaSheet
 import com.focussupervisor.app.ui.settings.TimelineSheet
@@ -126,6 +127,7 @@ fun ChatRoute(
         onEmbeddingDismiss = viewModel::onEmbeddingSheetDismiss,
         onTimelineDismiss = viewModel::onTimelineSheetDismiss,
         onClearTimeline = viewModel::onClearTimeline,
+        onGazeDismiss = viewModel::onGazeSheetDismiss,
         onMessageLongPress = viewModel::onMessageLongPress,
         onMessageActionDismiss = viewModel::onMessageActionDismiss,
         onMessageEditRequested = viewModel::onMessageEditRequested,
@@ -178,6 +180,7 @@ fun ChatScreen(
     onEmbeddingDismiss: () -> Unit,
     onTimelineDismiss: () -> Unit,
     onClearTimeline: () -> Unit,
+    onGazeDismiss: () -> Unit,
     onMessageLongPress: (ChatMessage) -> Unit,
     onMessageActionDismiss: () -> Unit,
     onMessageEditRequested: () -> Unit,
@@ -266,6 +269,10 @@ fun ChatScreen(
             onClear = onClearTimeline,
             onDismiss = onTimelineDismiss,
         )
+    }
+
+    if (uiState.isGazeSheetVisible) {
+        GazeSheet(onDismiss = onGazeDismiss)
     }
 
     // 长按消息的三步：操作面板 → 编辑 / 删除确认。
@@ -584,6 +591,7 @@ private fun ChatScreenPreview() {
             onEmbeddingDismiss = {},
             onTimelineDismiss = {},
             onClearTimeline = {},
+            onGazeDismiss = {},
             onMessageLongPress = {},
             onMessageActionDismiss = {},
             onMessageEditRequested = {},
@@ -619,6 +627,7 @@ private fun ChatScreenPanelExpandedPreview() {
             onEmbeddingDismiss = {},
             onTimelineDismiss = {},
             onClearTimeline = {},
+            onGazeDismiss = {},
             onMessageLongPress = {},
             onMessageActionDismiss = {},
             onMessageEditRequested = {},

@@ -28,6 +28,17 @@ datastore = "1.1.7"
 # （列模型、发一条测试消息），引入一整套注解处理器不划算。
 okhttp = "4.12.0"
 
+# ---- 摄像头 / 视觉 ---------------------------------------------------------
+# CameraX 1.4.2：与 compileSdk 35 / AGP 8.7.3 同一代的稳定版本。
+# 不追 1.5 / 1.6：那两条线要求 compileSdk 36，而本工程锁在 35。
+# 只引 core / camera2 / lifecycle，**不引 camera-view** ——
+# 后台注视检测不需要预览画面，少一个依赖少一份体积。
+camera = "1.4.2"
+# ML Kit 人脸检测（**打包版**）。选 com.google.mlkit 而不是
+# com.google.android.gms:play-services-mlkit-face-detection：前者把模型打进 APK
+# （约 +3~4MB），不依赖 Google Play 服务 —— 国产 ROM 上后者可能根本下不到模型。
+mlkitFace = "16.1.7"
+
 # ---- 测试 -----------------------------------------------------------------
 junit = "4.13.2"
 androidxJunit = "1.2.1"
@@ -39,6 +50,8 @@ androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = 
 androidx-lifecycle-runtime-ktx = { group = "androidx.lifecycle", name = "lifecycle-runtime-ktx", version.ref = "lifecycle" }
 androidx-lifecycle-runtime-compose = { group = "androidx.lifecycle", name = "lifecycle-runtime-compose", version.ref = "lifecycle" }
 androidx-lifecycle-viewmodel-compose = { group = "androidx.lifecycle", name = "lifecycle-viewmodel-compose", version.ref = "lifecycle" }
+# LifecycleService：让 Service 自带 LifecycleOwner，CameraX 的 bindToLifecycle 需要它。
+androidx-lifecycle-service = { group = "androidx.lifecycle", name = "lifecycle-service", version.ref = "lifecycle" }
 androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
 
 # ---- Compose（版本全部由 BOM 提供）----------------------------------------
@@ -58,6 +71,12 @@ okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhtt
 
 # ---- 协程 -----------------------------------------------------------------
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
+
+# ---- 摄像头 / 视觉 ---------------------------------------------------------
+androidx-camera-core = { group = "androidx.camera", name = "camera-core", version.ref = "camera" }
+androidx-camera-camera2 = { group = "androidx.camera", name = "camera-camera2", version.ref = "camera" }
+androidx-camera-lifecycle = { group = "androidx.camera", name = "camera-lifecycle", version.ref = "camera" }
+mlkit-face-detection = { group = "com.google.mlkit", name = "face-detection", version.ref = "mlkitFace" }
 
 # ---- 测试 -----------------------------------------------------------------
 junit = { group = "junit", name = "junit", version.ref = "junit" }

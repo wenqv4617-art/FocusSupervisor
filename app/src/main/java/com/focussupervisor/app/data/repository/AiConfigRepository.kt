@@ -6,6 +6,7 @@ import com.focussupervisor.app.domain.model.AiConfig
 import com.focussupervisor.app.domain.model.AiPreset
 import com.focussupervisor.app.domain.model.AiPresetDefaults
 import com.focussupervisor.app.domain.model.EmbeddingConfig
+import com.focussupervisor.app.domain.model.VisionConfig
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -58,6 +59,18 @@ interface AiConfigRepository {
 
     /** 保存向量模型配置。@return 是否写入成功。 */
     suspend fun saveEmbeddingConfig(config: EmbeddingConfig): Boolean
+
+    /**
+     * 视觉模型配置。同样**与对话配置完全独立**，理由见 [VisionConfig] 的注释 ——
+     * DeepSeek 不接受图片，混在一起会让两个功能互斥。
+     */
+    val visionConfig: StateFlow<VisionConfig>
+
+    /** 同步取视觉配置。注视监控在服务里要用，那里不方便收集 Flow。 */
+    fun visionConfigNow(): VisionConfig
+
+    /** 保存视觉模型配置。@return 是否写入成功。 */
+    suspend fun saveVisionConfig(config: VisionConfig): Boolean
 
     /** 插入或覆盖一个预设。@return 是否写入成功。 */
     suspend fun savePreset(preset: AiPreset): Boolean
@@ -116,12 +129,16 @@ class DataStoreAiConfigRepository(
     private val _embeddingConfig = MutableStateFlow(EmbeddingConfig())
     override val embeddingConfig: StateFlow<EmbeddingConfig> = _embeddingConfig.asStateFlow()
 
+    private val _visionConfig = MutableStateFlow(VisionConfig())
+    override val visionConfig: StateFlow<VisionConfig> = _visionConfig.asStateFlow()
+
     init {
         scope.launch {
             preferences.preferences.collect { prefs ->
                 _presets.value = prefs.presets
                 _selectedPresetId.value = prefs.selectedPresetId
                 _embeddingConfig.value = prefs.embeddingConfig
+                _visionConfig.value = prefs.visionConfig
             }
         }
     }
@@ -132,6 +149,11 @@ class DataStoreAiConfigRepository(
 
     override suspend fun saveEmbeddingConfig(config: EmbeddingConfig): Boolean =
         writeOrLog("保存向量模型配置") { preferences.updateEmbeddingConfig(config) }
+
+    override fun visionConfigNow(): VisionConfig = _visionConfig.value
+
+    override suspend fun saveVisionConfig(config: VisionConfig): Boolean =
+        writeOrLog("保存视觉模型配置") { preferences.updateVisionConfig(config) }
 
     override suspend fun savePreset(preset: AiPreset): Boolean =
         writeOrLog("保存预设") { preferences.upsertPreset(preset) }

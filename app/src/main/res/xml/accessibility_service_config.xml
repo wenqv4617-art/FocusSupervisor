@@ -5,22 +5,32 @@
   onServiceConnected() 里 setServiceInfo() 更清晰，也更容易被静态检查到。
 
   逐项说明：
-  - accessibilityEventTypes：只监听窗口切换与内容变化，是识别前台应用的最小集合。
+  - accessibilityEventTypes：监听窗口切换、窗口集合变化与内容变化。
+    **typeWindowsChanged 是关键**：小窗 / 分屏 / 画中画的进出只会发这一类事件，
+    而把应用缩成小窗时不一定产生 TYPE_WINDOW_STATE_CHANGED。少了它，用户一开小窗
+    服务就收不到任何相关事件，遮罩再也合不上。
     刻意不用 typeAllMask —— 那会让无关事件把服务刷爆，既耗电又扩大隐私面。
-  - canRetrieveWindowContent：读取窗口内容，用于 rootInActiveWindow 取当前前台包名。
+  - canRetrieveWindowContent：读取窗口内容，用于 rootInActiveWindow 取当前前台包名，
+    以及扫描 getWindows() 时从窗口根节点取包名。
   - flagReportViewIds / flagRetrieveInteractiveWindows：读取节点信息与交互窗口列表所必需。
-  - flagRequestFilterKeyEvents + canRequestFilterKeyEvents：**本阶段新增**，用于在遮罩
+    **没有 flagRetrieveInteractiveWindows 时 getWindows() 会返回空列表**，
+    小窗与画中画的判定会静默失效（拿不到任何窗口）。
+  - flagRequestFilterKeyEvents + canRequestFilterKeyEvents：用于在遮罩
     期间拦截返回键并强制回桌面。这是「不可绕过」的关键一环。少数定制 ROM 会限制
     按键过滤，那种情况下服务依然工作，只是返回键会落到下层应用手里。
+  - canTakeScreenshot：**注视监控要用**。判定为「正在注视」时需要截一张屏幕内容
+    发给视觉模型，而截图能力长在无障碍服务上（API 30+ 的 takeScreenshot）。
+    不声明这一项时，调用会直接回调失败，表现为「注视监控能跑但从来没有视觉描述」。
   - notificationTimeout：事件合并窗口。100ms 是响应速度与耗电的折中点 ——
     再小会让高频事件把主线程压满，再大会让遮罩明显迟到。
 -->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
-    android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged"
+    android:accessibilityEventTypes="typeWindowStateChanged|typeWindowsChanged|typeWindowContentChanged"
     android:accessibilityFeedbackType="feedbackGeneric"
     android:accessibilityFlags="flagDefault|flagReportViewIds|flagRetrieveInteractiveWindows|flagRequestFilterKeyEvents"
     android:canRetrieveWindowContent="true"
     android:canRequestFilterKeyEvents="true"
+    android:canTakeScreenshot="true"
     android:description="@string/accessibility_service_description"
     android:notificationTimeout="100"
     android:summary="@string/accessibility_service_label" />

@@ -14,6 +14,7 @@ import com.focussupervisor.app.domain.model.AiPersona
 import com.focussupervisor.app.domain.model.AiPreset
 import com.focussupervisor.app.domain.model.ChatMessage
 import com.focussupervisor.app.domain.model.EmbeddingConfig
+import com.focussupervisor.app.domain.model.GazeConfig
 import com.focussupervisor.app.domain.model.IndexedDocument
 import com.focussupervisor.app.domain.model.MemoryDefaults
 import com.focussupervisor.app.domain.model.MemoryEntry
@@ -21,6 +22,7 @@ import com.focussupervisor.app.domain.model.TimelineDefaults
 import com.focussupervisor.app.domain.model.TimelineEvent
 import com.focussupervisor.app.domain.model.TodoItem
 import com.focussupervisor.app.domain.model.UserPersona
+import com.focussupervisor.app.domain.model.VisionConfig
 import com.focussupervisor.app.domain.model.WhitelistApp
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
@@ -215,6 +217,26 @@ class AppPreferencesDataSource(context: Context) {
     }
 
     // -----------------------------------------------------------------------
+    // 视觉模型配置（同样独立的一份）
+    // -----------------------------------------------------------------------
+
+    suspend fun updateVisionConfig(config: VisionConfig) {
+        dataStore.edit { prefs ->
+            prefs[KEY_VISION_CONFIG] = PreferencesCodec.encodeVisionConfig(config)
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // 注视监控
+    // -----------------------------------------------------------------------
+
+    suspend fun updateGazeConfig(config: GazeConfig) {
+        dataStore.edit { prefs ->
+            prefs[KEY_GAZE_CONFIG] = PreferencesCodec.encodeGazeConfig(config)
+        }
+    }
+
+    // -----------------------------------------------------------------------
     // 人设
     // -----------------------------------------------------------------------
 
@@ -360,6 +382,8 @@ class AppPreferencesDataSource(context: Context) {
         presets = PreferencesCodec.decodePresets(this[KEY_AI_PRESETS]),
         selectedPresetId = this[KEY_AI_SELECTED_PRESET].orEmpty(),
         embeddingConfig = PreferencesCodec.decodeEmbeddingConfig(this[KEY_EMBEDDING_CONFIG]),
+        visionConfig = PreferencesCodec.decodeVisionConfig(this[KEY_VISION_CONFIG]),
+        gazeConfig = PreferencesCodec.decodeGazeConfig(this[KEY_GAZE_CONFIG]),
         aiPersona = PreferencesCodec.decodeAiPersona(this[KEY_AI_PERSONA]),
         userPersona = PreferencesCodec.decodeUserPersona(this[KEY_USER_PERSONA]),
         memories = PreferencesCodec.decodeMemories(this[KEY_MEMORIES]),
@@ -403,6 +427,8 @@ class AppPreferencesDataSource(context: Context) {
         private val KEY_AI_PRESETS = stringPreferencesKey("ai_presets_json")
         private val KEY_AI_SELECTED_PRESET = stringPreferencesKey("ai_selected_preset_id")
         private val KEY_EMBEDDING_CONFIG = stringPreferencesKey("embedding_config_json")
+        private val KEY_VISION_CONFIG = stringPreferencesKey("vision_config_json")
+        private val KEY_GAZE_CONFIG = stringPreferencesKey("gaze_config_json")
         private val KEY_AI_PERSONA = stringPreferencesKey("ai_persona_json")
         private val KEY_USER_PERSONA = stringPreferencesKey("user_persona_json")
         private val KEY_MEMORIES = stringPreferencesKey("memories_json")
@@ -429,6 +455,8 @@ data class AppPreferences(
     val presets: List<AiPreset> = emptyList(),
     val selectedPresetId: String = "",
     val embeddingConfig: EmbeddingConfig = EmbeddingConfig(),
+    val visionConfig: VisionConfig = VisionConfig(),
+    val gazeConfig: GazeConfig = GazeConfig(),
     val aiPersona: AiPersona = AiPersona(),
     val userPersona: UserPersona = UserPersona(),
     val memories: List<MemoryEntry> = emptyList(),

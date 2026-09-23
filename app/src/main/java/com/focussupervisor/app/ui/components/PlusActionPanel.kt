@@ -224,7 +224,10 @@ private fun PlusActionButton(
  *
  * @param needsPermissionAttention 是否有权限未开启。为真时「权限检查」右上角亮红点。
  */
-fun defaultActionItems(needsPermissionAttention: Boolean = false): List<ActionItem> = listOf(
+fun defaultActionItems(
+    needsPermissionAttention: Boolean = false,
+    needsGazeAttention: Boolean = false,
+): List<ActionItem> = listOf(
     ActionItem(
         id = ActionIds.PERMISSION_CHECK,
         label = "权限检查",
@@ -265,6 +268,9 @@ fun defaultActionItems(needsPermissionAttention: Boolean = false): List<ActionIt
         id = ActionIds.GAZE_MONITOR,
         label = "注视监控",
         icon = Icons.Outlined.Face,
+        // 开了注视监控却没给摄像头权限时点红点：那是一个「你以为它在工作，
+        // 其实它连摄像头都打不开」的状态，必须让人看见。
+        needsAttention = needsGazeAttention,
     ),
     ActionItem(
         id = ActionIds.AI_CONFIG,

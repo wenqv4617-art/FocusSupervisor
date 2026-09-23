@@ -4,12 +4,22 @@ import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.Rect
+import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
+import android.view.Display
 import android.view.KeyEvent
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityManager
+import android.view.accessibility.AccessibilityWindowInfo
+import androidx.annotation.RequiresApi
+import androidx.core.content.ContextCompat
 import com.focussupervisor.app.MainActivity
 import com.focussupervisor.app.appContainer
+import com.focussupervisor.app.core.vision.ScreenCaptureProvider
 import com.focussupervisor.app.data.repository.AppPolicyRepository
 import com.focussupervisor.app.data.repository.TimelineRepository
 import com.focussupervisor.app.domain.model.SystemWhitelist
@@ -20,6 +30,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
+import java.io.ByteArrayOutputStream
+import kotlin.coroutines.resume
 
 /**
  * 无障碍服务 —— 应用监督的执行端。
@@ -103,6 +116,21 @@ class FocusAccessibilityService : AccessibilityService() {
      */
     private var lastBlockNotifiedPackage: String? = null
 
+    /**
+     * 窗口 id → 包名。
+     *
+     * 扫描窗口时首选 `window.root?.packageName`，但那个值不总能拿到（窗口刚出现、
+     * 应用无响应、系统虚拟窗口都会返回 null），而事件里的 `packageName` 是可靠的。
+     * 把见到过的对应关系记下来兜底。
+     *
+     * 只在主线程读写（无障碍回调与 Handler 都在主线程），所以不需要加锁。
+     */
+    private val packageByWindowId = mutableMapOf<Int, String>()
+
+    /** 窗口扫描的去抖，见 [scheduleWindowScan]。 */
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val windowScan = Runnable { evaluateWindows() }
+
     override fun onCreate() {
         super.onCreate()
         // 容器由 Application.onCreate 建好，此时一定已就绪。
@@ -124,6 +152,11 @@ class FocusAccessibilityService : AccessibilityService() {
         lastEvaluatedPackage = null
         lastBlockNotifiedPackage = null
         hasWarnedMissingOverlayPermission = false
+        packageByWindowId.clear()
+
+        // 把「截屏」这项能力挂到全局通道上，供注视监控取用。
+        // 两者生命周期不同（无障碍服务会被系统随时重建），所以只传能力、不传实例。
+        ScreenCaptureProvider.capture = { captureScreen() }
 
         Log.i(TAG, "无障碍服务已连接")
         policy.publishNotice("无障碍服务已连接，开始监督前台应用")
@@ -153,6 +186,26 @@ class FocusAccessibilityService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         // 系统在服务即将断开时可能给 null。
         val safeEvent = event ?: return
+
+        // 记下「窗口 → 包名」。窗口的 root 节点不一定随时可取（刚出现、应用无响应、
+        // 系统虚拟窗口），拿到过就先记住，扫描窗口时当作兜底。
+        val windowId = safeEvent.windowId
+        safeEvent.packageName?.toString()
+            ?.takeIf { it.isNotEmpty() && windowId >= 0 }
+            ?.let { packageByWindowId[windowId] = it }
+
+        // -------------------------------------------------------------------
+        // 窗口集合本身的变化：小窗 / 分屏 / 画中画 走这条
+        // -------------------------------------------------------------------
+        // 这是之前漏掉的一整类事件。它的 packageName 常常是空的或者不相干的，
+        // 而真正需要知道的是「屏幕上现在有哪些窗口」—— 按「前台是谁」判断，
+        // 一旦用户把被拦应用缩成小窗，前台就变成了桌面（白名单），
+        // 遮罩自己就撤了，而小窗还在播。
+        if (safeEvent.eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED) {
+            scheduleWindowScan()
+            return
+        }
+
         if (safeEvent.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
 
         val packageName = safeEvent.packageName
@@ -248,6 +301,9 @@ class FocusAccessibilityService : AccessibilityService() {
         lockOverlay.dismiss()
         lastEvaluatedPackage = null
         lastBlockNotifiedPackage = null
+        mainHandler.removeCallbacks(windowScan)
+        packageByWindowId.clear()
+        ScreenCaptureProvider.capture = null
         Log.i(TAG, "无障碍服务已解绑")
         return super.onUnbind(intent)
     }
@@ -263,14 +319,205 @@ class FocusAccessibilityService : AccessibilityService() {
         lockOverlay.dismiss()
         lastEvaluatedPackage = null
         lastBlockNotifiedPackage = null
+        mainHandler.removeCallbacks(windowScan)
+        packageByWindowId.clear()
+        ScreenCaptureProvider.capture = null
         serviceScope.cancel()
         Log.i(TAG, "无障碍服务已销毁")
         super.onDestroy()
     }
 
     // -----------------------------------------------------------------------
+    // 截屏能力
+    // -----------------------------------------------------------------------
+
+    /**
+     * 截取当前屏幕，返回压缩后的 JPEG 字节；拿不到就返回 null。
+     *
+     * ===========================================================================
+     * 为什么用无障碍的 takeScreenshot 而不是 MediaProjection
+     * ===========================================================================
+     * `MediaProjection` 每次都要用户点一次系统授权弹窗，而且 Android 14 起每个会话
+     * 都得重新授权 —— 那种东西没法用在「后台自动看一眼」的场景里。
+     * 无障碍服务的 `takeScreenshot`（API 30+）在服务已启用的前提下直接可用，
+     * 代价是系统会限制调用频率（间隔太短会回调
+     * `ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT`），而那正好也是一层保护。
+     *
+     * 低于 Android 11 时返回 null —— 注视监控照常记录「在看 / 没在看」，
+     * 只是不发截图。功能降级，而不是功能失效。
+     */
+    private suspend fun captureScreen(): ByteArray? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return null
+
+        return suspendCancellableCoroutine { continuation ->
+            try {
+                takeScreenshot(
+                    Display.DEFAULT_DISPLAY,
+                    ContextCompat.getMainExecutor(this),
+                    object : TakeScreenshotCallback {
+                        override fun onSuccess(screenshot: ScreenshotResult) {
+                            val bytes = runCatching { screenshot.toJpegBytes() }
+                                .onFailure { Log.w(TAG, "截图转码失败", it) }
+                                .getOrNull()
+                            // HardwareBuffer 是有限资源，必须显式释放。
+                            runCatching { screenshot.hardwareBuffer.close() }
+                            if (continuation.isActive) continuation.resume(bytes)
+                        }
+
+                        override fun onFailure(errorCode: Int) {
+                            Log.w(TAG, "截屏失败，错误码 $errorCode")
+                            if (continuation.isActive) continuation.resume(null)
+                        }
+                    },
+                )
+            } catch (t: Throwable) {
+                // 少数 ROM 会直接抛（例如服务刚重建、权限被回收）。
+                Log.w(TAG, "截屏调用异常", t)
+                if (continuation.isActive) continuation.resume(null)
+            }
+        }
+    }
+
+    /**
+     * 把系统给的硬件位图压成一张小 JPEG。
+     *
+     * 三步都是必要的：
+     *  1. `wrapHardwareBuffer` 得到的是**只读**的硬件位图，不能直接压缩，必须先 copy；
+     *  2. 缩到 [SCREENSHOT_MAX_WIDTH] 宽 —— 这一步决定了发出去的 token 数量，
+     *     比任何提示词技巧都省得多；
+     *  3. JPEG 质量 70：手机截图以文字为主，再高只是白白增加体积。
+     */
+    @RequiresApi(Build.VERSION_CODES.R)
+    private fun ScreenshotResult.toJpegBytes(): ByteArray? {        val hardware = Bitmap.wrapHardwareBuffer(hardwareBuffer, colorSpace) ?: return null
+        val software = hardware.copy(Bitmap.Config.ARGB_8888, false)
+        hardware.recycle()
+        if (software == null) return null
+
+        val scaled = if (software.width > SCREENSHOT_MAX_WIDTH) {
+            val height = software.height * SCREENSHOT_MAX_WIDTH / software.width
+            Bitmap.createScaledBitmap(software, SCREENSHOT_MAX_WIDTH, height, true)
+                .also { software.recycle() }
+        } else {
+            software
+        }
+
+        return ByteArrayOutputStream().use { stream ->
+            scaled.compress(Bitmap.CompressFormat.JPEG, SCREENSHOT_QUALITY, stream)
+            scaled.recycle()
+            stream.toByteArray()
+        }
+    }
+
+    // -----------------------------------------------------------------------
     // 判定与执行
     // -----------------------------------------------------------------------
+
+    /**
+     * 延迟一小会儿再扫描窗口。
+     *
+     * 进出小窗/分屏时系统会连着发好几条窗口变化事件（动画期间 bounds 一直在动），
+     * 每次都去 `getWindows()` 既浪费又会让判定在动画中间来回抖。250ms 足够越过
+     * 动画，又快到用户感觉不出延迟。
+     */
+    private fun scheduleWindowScan() {
+        mainHandler.removeCallbacks(windowScan)
+        mainHandler.postDelayed(windowScan, WINDOW_SCAN_DELAY_MILLIS)
+    }
+
+    /**
+     * 扫描当前所有窗口，决定该锁还是该放。
+     *
+     * 与 [evaluateActiveWindow] 的区别：那个问「前台是谁」，这个问「屏幕上有没有
+     * 不该看的窗口」。小窗、分屏、画中画这三种形态下，「前台」和「屏幕上有什么」
+     * 是两回事 —— 前台可能是桌面，而小窗里还开着被拦的应用。
+     */
+    private fun evaluateWindows() {
+        // 测试遮罩盖的是本应用自己，撤不撤由 runLockTest 的定时器决定，
+        // 这里必须绕开：否则一有窗口变化就会被误撤，5 秒测试变成一闪而过。
+        if (lockOverlay.isShowing.value && lockOverlay.lockedPackage.value == this.packageName) return
+
+        val offender = findBlockedWindow()
+        if (offender != null) {
+            evaluate(offender, publishBlockNotice = true)
+            return
+        }
+
+        // 扫描没找到任何违规窗口 —— 这是比「问前台是谁」更硬的证据：
+        // 前台可能查不到（正在切换、锁屏），也可能正好是桌面。
+        if (lockOverlay.isShowing.value) {
+            lockOverlay.dismiss()
+            lastEvaluatedPackage = null
+            lastBlockNotifiedPackage = null
+        }
+    }
+
+    /**
+     * 返回一个「此刻真的显示在屏幕上、且不该看」的应用包名；没有就返回 null。
+     *
+     * 判据全部取自窗口本身，不看前台是谁 —— 这正是小窗能拦住的原理。
+     */
+    private fun findBlockedWindow(): String? {
+        val windowList = try {
+            windows
+        } catch (t: Throwable) {
+            // 少数 ROM 在服务刚连接时会抛，放弃本次扫描即可，后面的窗口事件会补上。
+            Log.w(TAG, "读取窗口列表失败", t)
+            null
+        } ?: return null
+
+        val screenWidth = resources.displayMetrics.widthPixels
+        val screenHeight = resources.displayMetrics.heightPixels
+
+        for (window in windowList) {
+            if (window.type != AccessibilityWindowInfo.TYPE_APPLICATION) continue
+
+            // 空矩形 = 这个窗口在无障碍看来没有任何可交互区域，也就是没显示在屏幕上。
+            // 完全退到后台的应用、只剩最近任务里的快照，都会走到这里被排除。
+            val bounds = Rect()
+            window.getBoundsInScreen(bounds)
+            if (bounds.isEmpty) continue
+            if (bounds.width() < MIN_WINDOW_SIDE_PX || bounds.height() < MIN_WINDOW_SIDE_PX) continue
+            if (!isBlockableWindow(window, bounds, screenWidth, screenHeight)) continue
+
+            val pkg = window.root?.packageName?.toString()?.takeIf { it.isNotEmpty() }
+                ?: packageByWindowId[window.id]
+                ?: continue
+
+            if (pkg == this.packageName) continue
+            if (pkg in SystemWhitelist.TRANSIENT_WINDOW_PACKAGES) continue
+            if (policy.isInputMethod(pkg)) continue
+            if (policy.isAppWhitelisted(pkg)) continue
+
+            return pkg
+        }
+
+        return null
+    }
+
+    /**
+     * 这个窗口值不值得为它盖一整屏遮罩。
+     *
+     * 为什么要这么绕：`TYPE_APPLICATION` 里混着一些**不是应用界面**的东西 ——
+     * 别的应用弹的 Toast 也会被系统映射成 `TYPE_APPLICATION`。如果只按
+     * 「非白名单就拦」，别人弹一条提示就能让用户满屏黑一次。
+     *
+     * 所以要求下面三条里至少满足一条：
+     *  - 它在画中画里（小窗；这种窗口通常既不 active 也不 focused，必须单独认）；
+     *  - 它拿到了焦点或处于活动状态（正常前台、分屏里被操作的那一侧）；
+     *  - 它在某一维上至少占了半屏（分屏的另一侧、自由窗口里较大的那些）。
+     *
+     * Toast 又小又不抢焦点，三条都不满足，于是被排除。
+     */
+    private fun isBlockableWindow(
+        window: AccessibilityWindowInfo,
+        bounds: Rect,
+        screenWidth: Int,
+        screenHeight: Int,
+    ): Boolean {
+        if (window.isInPictureInPictureMode()) return true
+        if (window.isFocused() || window.isActive()) return true
+        return bounds.width() >= screenWidth / 2 || bounds.height() >= screenHeight / 2
+    }
 
     /**
      * 询问系统「现在前台是谁」并立即判定一次。
@@ -301,6 +548,20 @@ class FocusAccessibilityService : AccessibilityService() {
         val whitelisted = policy.isAppWhitelisted(packageName)
 
         if (whitelisted) {
+            // -----------------------------------------------------------------
+            // 先确认屏幕上没有**别的**违规窗口
+            // -----------------------------------------------------------------
+            // 「刚发生事件的这个包」在白名单里，只说明它自己没问题，不代表屏幕上没有
+            // 别的。用户把被拦的应用缩成小窗时，前台会变成桌面，而桌面在白名单里 ——
+            // 只看前台就等于把小窗放跑了（这正是「一开小窗遮罩就解除」的原因）。
+            val offender = findBlockedWindow()
+            if (offender != null) {
+                if (!lockOverlay.isShowing.value || lockOverlay.lockedPackage.value != offender) {
+                    showLockFor(offender, publishBlockNotice)
+                }
+                return
+            }
+
             // -----------------------------------------------------------------
             // 关键：撤遮罩之前，先确认「用户真的已经不在被拦的应用里了」
             // -----------------------------------------------------------------
@@ -334,6 +595,16 @@ class FocusAccessibilityService : AccessibilityService() {
             return
         }
 
+        showLockFor(packageName, publishBlockNotice)
+    }
+
+    /**
+     * 真正的压制动作：盖上遮罩，必要时播报一次。
+     *
+     * 单独抽出来是因为它有两个入口：常规的「前台是非白名单应用」，以及
+     * 「前台是白名单应用、但屏幕上还有别的小窗」。两条路共用同一套去重与播报规则。
+     */
+    private fun showLockFor(packageName: String, publishBlockNotice: Boolean) {
         // 同一个被拦应用、遮罩也还在，就没有任何事要做。
         // 少了这一句，同一次拦截会被反复 show()，虽然 show() 本身幂等，但播报会刷屏。
         if (packageName == lastEvaluatedPackage && lockOverlay.isShowing.value) return
@@ -398,6 +669,33 @@ class FocusAccessibilityService : AccessibilityService() {
 
     companion object {
         private const val TAG = "FocusAccessibility"
+
+        /**
+         * 窗口扫描的去抖延迟。
+         *
+         * 进出小窗/分屏时系统会连发好几条窗口变化事件（动画期间 bounds 一直在动），
+         * 250ms 足够越过动画，又快到用户感觉不出延迟。
+         */
+        private const val WINDOW_SCAN_DELAY_MILLIS = 250L
+
+        /**
+         * 小于这个边长的窗口直接忽略（单位：像素）。
+         *
+         * 用来滤掉分割条一类的装饰窗口。别设得太大 —— 画中画小窗在某些机器上
+         * 只有一百多像素宽，滤掉了就正好漏掉要拦的那一个。
+         */
+        private const val MIN_WINDOW_SIDE_PX = 24
+
+        /**
+         * 截图缩放后的最大宽度（像素）。
+         *
+         * 这一条直接决定发给视觉模型的 token 数量。手机截图以文字为主，720 宽足够
+         * 看清「他在刷什么」，再大只是让每一次注视都更贵、更慢。
+         */
+        private const val SCREENSHOT_MAX_WIDTH = 720
+
+        /** JPEG 压缩质量。70 是文字可读性与体积的常用折中点。 */
+        private const val SCREENSHOT_QUALITY = 70
 
         /**
          * 本应用唯一 Activity 的类名。
