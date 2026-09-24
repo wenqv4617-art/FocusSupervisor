@@ -50,6 +50,19 @@ interface AiConfigRepository {
     fun activeConfigNow(): AiConfig
 
     /**
+     * 就地修改**当前选中预设**的配置。
+     *
+     * 为什么需要它：有一些开关（「改用端侧对话模型」「选哪个端侧模型」）不属于
+     * 任何一个独立配置块，它们是当前预设的一部分。让调用方自己取出预设、copy、
+     * 再 savePreset 会把「到底改的是哪一个预设」这个问题散到每个调用点，
+     * 任何一处取错（比如取了第一个而不是选中的那个）都不会报错，只会静默改错配置。
+     *
+     * @param transform 在选中预设的配置上做修改。
+     * @return 是否写入成功。没有选中预设、或找不到对应预设时返回 false。
+     */
+    suspend fun updateActiveConfig(transform: (AiConfig) -> AiConfig): Boolean
+
+    /**
      * 向量模型配置。**与对话配置完全独立**，理由见 [EmbeddingConfig] 的注释。
      */
     val embeddingConfig: StateFlow<EmbeddingConfig>
@@ -154,6 +167,16 @@ class DataStoreAiConfigRepository(
 
     override suspend fun saveVisionConfig(config: VisionConfig): Boolean =
         writeOrLog("保存视觉模型配置") { preferences.updateVisionConfig(config) }
+
+    override suspend fun updateActiveConfig(transform: (AiConfig) -> AiConfig): Boolean {
+        val id = _selectedPresetId.value
+        val preset = _presets.value.firstOrNull { it.id == id }
+            ?: _presets.value.firstOrNull()
+            ?: return false
+        return writeOrLog("保存端点配置") {
+            preferences.upsertPreset(preset.copy(config = transform(preset.config)))
+        }
+    }
 
     override suspend fun savePreset(preset: AiPreset): Boolean =
         writeOrLog("保存预设") { preferences.upsertPreset(preset) }

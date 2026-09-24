@@ -3,13 +3,19 @@ package com.focussupervisor.app.ui.settings
 import android.Manifest
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
@@ -24,6 +30,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
@@ -31,8 +38,11 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.focussupervisor.app.domain.model.GazeState
 import com.focussupervisor.app.domain.model.VisionConfig
+import com.focussupervisor.app.domain.model.VisionEngineKind
+import com.focussupervisor.app.domain.model.VisionSource
 import com.focussupervisor.app.domain.model.VisionStatus
 import com.focussupervisor.app.ui.theme.FocusTheme
+import com.focussupervisor.app.ui.theme.PastelTone
 
 /**
  * 注视监控面板。
@@ -94,6 +104,8 @@ fun GazeSheet(
             onAnalyzeIntervalChange = viewModel::setAnalyzeInterval,
             onToleranceChange = viewModel::setTolerance,
             onRequestCamera = { permissionLauncher.launch(Manifest.permission.CAMERA) },
+            onVisionSourceChange = viewModel::onVisionSourceChange,
+            onVisionEngineChange = viewModel::onVisionEngineChange,
             onBaseUrlChange = viewModel::onVisionBaseUrlChange,
             onApiKeyChange = viewModel::onVisionApiKeyChange,
             onModelChange = viewModel::onVisionModelChange,
@@ -116,6 +128,8 @@ private fun GazeContent(
     onAnalyzeIntervalChange: (Long) -> Unit,
     onToleranceChange: (Float) -> Unit,
     onRequestCamera: () -> Unit,
+    onVisionSourceChange: (VisionSource) -> Unit,
+    onVisionEngineChange: (VisionEngineKind) -> Unit,
     onBaseUrlChange: (String) -> Unit,
     onApiKeyChange: (String) -> Unit,
     onModelChange: (String) -> Unit,
@@ -312,9 +326,46 @@ private fun GazeContent(
         }
 
         SheetSection(
-            title = "视觉模型",
-            subtitle = "和对话端点是两份独立配置。DeepSeek 不接受图片，所以这里必须另配一家多模态服务。",
+            title = "识图方式",
+            subtitle = "两条路互斥，不会自动回退 —— 选了本地就真的完全不出这台手机。",
+            tone = PastelTone.SKY,
         ) {
+            SheetSegmented(
+                options = listOf("在线多模态 API", "本地端侧识图"),
+                selectedIndex = if (uiState.draft.source == VisionSource.LOCAL) 1 else 0,
+                onSelect = { index ->
+                    onVisionSourceChange(
+                        if (index == 1) VisionSource.LOCAL else VisionSource.ONLINE_API,
+                    )
+                },
+            )
+
+            if (uiState.draft.source == VisionSource.LOCAL) {
+                VisionEngineKind.entries.forEach { engine ->
+                    LocalEngineCard(
+                        engine = engine,
+                        selected = uiState.draft.localEngine == engine,
+                        onClick = { onVisionEngineChange(engine) },
+                    )
+                }
+                SheetNote(
+                    text = "本地识图把「看图」这一步留在了手机上：截图在本机被解析成一句事实，" +
+                        "再写进时间线。于是对话端无论是云端 DeepSeek 还是端侧纯文本模型，" +
+                        "都能知道屏幕上发生了什么 —— 不需要一个能看图的对话模型。",
+                    tone = PastelTone.MINT,
+                )
+            }
+        }
+
+        // 在线多模态的配置只在选它的时候出现。
+        //
+        // 隐藏而不是置灰：置灰会让用户以为「填了就能用」，而这两条路是互斥的 ——
+        // 选了本地之后，那三个输入框填什么都不影响任何行为，留着只是噪音。
+        if (uiState.draft.source == VisionSource.ONLINE_API) {
+            SheetSection(
+                title = "多模态端点",
+                subtitle = "和对话端点是两份独立配置。DeepSeek 不接受图片，所以这里必须另配一家多模态服务。",
+            ) {
             SheetTextField(
                 label = "Base URL",
                 value = uiState.draft.baseUrl,
@@ -393,7 +444,26 @@ private fun GazeContent(
                 footer = "回答会被写进时间线，再进入 AI 的上下文。所以要求它一句话说清事实，" +
                     "而不是写一篇分析。",
             )
+            }
+        } else {
+            SheetSection(
+                title = "看图时问它什么",
+                subtitle = "本地识图时，这段话决定从屏幕文字里挑什么 —— 它不会改变引擎本身的能力。",
+                tone = PastelTone.LILAC,
+            ) {
+                SheetTextField(
+                    label = "提炼要求",
+                    value = uiState.draft.prompt,
+                    onValueChange = onPromptChange,
+                    placeholder = VisionConfig.DEFAULT_PROMPT,
+                    singleLine = false,
+                    minHeight = 90,
+                    footer = "端侧摘要会写进时间线，再进入 AI 的上下文。要求它一句话说清事实。",
+                )
+            }
+        }
 
+        SheetSection(title = "保存", tone = null) {
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 SheetPrimaryButton(
                     text = if (uiState.isSaving) "保存中…" else "保存",
@@ -417,6 +487,78 @@ private fun GazeContent(
                 style = MaterialTheme.typography.bodySmall,
                 color = FocusTheme.colors.textSecondary,
             )
+        }
+    }
+}
+
+/**
+ * 一张本地识图引擎的选项卡。
+ *
+ * 不可用的那一张**不画任何按钮**，只把原因写在卡片上。
+ * 画一个禁用的按钮会让人以为「条件满足了就能点」，而这一项缺的不是条件，是运行时 ——
+ * 那两件事必须让人一眼分清。
+ */
+@Composable
+private fun LocalEngineCard(
+    engine: VisionEngineKind,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    val colors = FocusTheme.colors
+    val shape = RoundedCornerShape(14.dp)
+    val tone = if (engine.isAvailable) PastelTone.MINT else PastelTone.BLUSH
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(colors.surfaceCardMuted)
+            .clickable(enabled = engine.isAvailable, onClick = onClick)
+            .padding(12.dp),
+        verticalAlignment = Alignment.Top,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        // 选中标记。不可用时画成一个空心圈，表示「这个选项存在但现在选不了」。
+        Box(
+            modifier = Modifier
+                .padding(top = 3.dp)
+                .size(16.dp)
+                .clip(CircleShape)
+                .background(
+                    if (selected && engine.isAvailable) colors.pastelMintInk
+                    else colors.surfaceCard,
+                ),
+        )
+
+        Column(modifier = Modifier.weight(1f)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    text = engine.label,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (engine.isAvailable) colors.textPrimary else colors.textSecondary,
+                )
+                SheetPill(
+                    text = if (engine.isAvailable) "可用" else "暂不可用",
+                    tone = tone,
+                )
+            }
+            Text(
+                text = engine.tagline,
+                style = MaterialTheme.typography.labelSmall,
+                color = colors.textSecondary,
+            )
+            Text(
+                text = engine.detail,
+                style = MaterialTheme.typography.bodySmall,
+                color = colors.textSecondary,
+                modifier = Modifier.padding(top = 4.dp),
+            )
+            engine.unavailableReason?.let { reason ->
+                SheetNote(text = reason, tone = PastelTone.BLUSH, modifier = Modifier.padding(top = 6.dp))
+            }
         }
     }
 }

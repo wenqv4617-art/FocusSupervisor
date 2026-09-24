@@ -157,6 +157,8 @@ data class ChatUiState(
     val isAppearanceSheetVisible: Boolean = false,
     /** 数据管理面板是否展开。 */
     val isDataManageSheetVisible: Boolean = false,
+    /** 资源管理面板是否展开。 */
+    val isResourceSheetVisible: Boolean = false,
     val timelineEvents: List<TimelineEvent> = emptyList(),
     val nowMillis: Long = System.currentTimeMillis(),
     /**

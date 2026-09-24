@@ -327,9 +327,25 @@ data class VisionConfig(
     val apiKey: String = "",
     val model: String = "",
     val prompt: String = DEFAULT_PROMPT,
+    /** 走云端多模态还是本机识图。默认云端，与升级前的行为一致。 */
+    val source: VisionSource = VisionSource.ONLINE_API,
+    /** 本地识图用哪个引擎。仅在 [source] 为 [VisionSource.LOCAL] 时有意义。 */
+    val localEngine: VisionEngineKind = VisionEngineKind.ML_KIT_OCR,
 ) {
-    /** 三项都填了才算配置完整。prompt 有默认值，不参与判断。 */
+    /**
+     * 当前这条链路能不能用。
+     *
+     * 判据**必须按来源分开**：走本地时 URL 与模型名根本不会被用到，
+     * 拿它们判断会让「选了本地识图却因为没填 URL 而用不了」变成一个说不通的状态。
+     */
     val isUsable: Boolean
+        get() = when (source) {
+            VisionSource.ONLINE_API -> baseUrl.isNotBlank() && model.isNotBlank()
+            VisionSource.LOCAL -> localEngine.isAvailable
+        }
+
+    /** 云端那一栏是否配置完整。界面用它决定要不要提示「还没配」。 */
+    val isOnlineConfigured: Boolean
         get() = baseUrl.isNotBlank() && model.isNotBlank()
 
     companion object {

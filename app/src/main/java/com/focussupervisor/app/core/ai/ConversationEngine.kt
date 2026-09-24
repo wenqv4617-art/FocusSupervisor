@@ -4,6 +4,7 @@ import android.util.Log
 import com.focussupervisor.app.core.ai.prompt.ChatTemplate
 import com.focussupervisor.app.core.ai.prompt.PromptProfile
 import com.focussupervisor.app.core.ai.prompt.PromptProfiles
+import com.focussupervisor.app.core.network.ChatTurn
 import com.focussupervisor.app.core.network.OpenAiCompatibleClient
 import com.focussupervisor.app.data.repository.AiConfigRepository
 import com.focussupervisor.app.data.repository.AppPolicyRepository

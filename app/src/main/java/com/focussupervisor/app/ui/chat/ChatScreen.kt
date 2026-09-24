@@ -76,6 +76,7 @@ import com.focussupervisor.app.ui.components.rememberFileImage
 import com.focussupervisor.app.ui.settings.AiConfigSheet
 import com.focussupervisor.app.ui.settings.AppearanceSheet
 import com.focussupervisor.app.ui.settings.DataManageSheet
+import com.focussupervisor.app.ui.settings.ResourceSheet
 import com.focussupervisor.app.ui.settings.EmbeddingSheet
 import com.focussupervisor.app.ui.settings.GazeSheet
 import com.focussupervisor.app.ui.settings.MemorySheet
@@ -165,6 +166,8 @@ fun ChatRoute(
             onMessageDeleteConfirm = viewModel::onMessageDeleteConfirm,
             onAppearanceDismiss = viewModel::onAppearanceSheetDismiss,
             onDataManageDismiss = viewModel::onDataManageSheetDismiss,
+        onOpenResources = viewModel::onOpenResources,
+        onResourceSheetDismiss = viewModel::onResourceSheetDismiss,
             modifier = modifier,
             )
     }
@@ -227,6 +230,8 @@ fun ChatScreen(
     onMessageDeleteConfirm: () -> Unit,
     onAppearanceDismiss: () -> Unit,
     onDataManageDismiss: () -> Unit,
+    onOpenResources: () -> Unit,
+    onResourceSheetDismiss: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val skin = ChatTheme.skin
@@ -326,7 +331,14 @@ fun ChatScreen(
     }
 
     if (uiState.isDataManageSheetVisible) {
-        DataManageSheet(onDismiss = onDataManageDismiss)
+        DataManageSheet(
+            onDismiss = onDataManageDismiss,
+            onOpenResources = onOpenResources,
+        )
+    }
+
+    if (uiState.isResourceSheetVisible) {
+        ResourceSheet(onDismiss = onResourceSheetDismiss)
     }
 
     // 长按消息的三步：操作面板 → 编辑 / 删除确认。
@@ -759,6 +771,8 @@ private fun ChatScreenPreview() {
             onMessageDeleteConfirm = {},
             onAppearanceDismiss = {},
             onDataManageDismiss = {},
+            onOpenResources = {},
+            onResourceSheetDismiss = {},
         )
     }
 }

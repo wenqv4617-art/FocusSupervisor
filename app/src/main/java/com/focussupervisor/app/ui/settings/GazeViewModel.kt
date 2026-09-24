@@ -12,6 +12,8 @@ import com.focussupervisor.app.domain.model.AiConfig
 import com.focussupervisor.app.domain.model.GazeConfig
 import com.focussupervisor.app.domain.model.GazeDefaults
 import com.focussupervisor.app.domain.model.VisionConfig
+import com.focussupervisor.app.domain.model.VisionEngineKind
+import com.focussupervisor.app.domain.model.VisionSource
 import com.focussupervisor.app.domain.model.VisionStatus
 import com.focussupervisor.app.service.FocusMonitorService
 import kotlinx.coroutines.Job
@@ -55,7 +57,11 @@ data class GazeUiState(
         get() = draft.baseUrl != savedVision.baseUrl ||
             draft.apiKey != savedVision.apiKey ||
             draft.model != savedVision.model ||
-            draft.prompt != savedVision.prompt
+            draft.prompt != savedVision.prompt ||
+            // 来源与本地引擎也算改动：用户从「在线」切到「本地」之后如果这一项不算脏，
+            // 界面上的「未保存」提示就不会出现，他会以为已经生效了。
+            draft.source != savedVision.source ||
+            draft.localEngine != savedVision.localEngine
 
     val canSaveVision: Boolean get() = !isBusy
 
@@ -79,6 +85,8 @@ class GazeViewModel(application: Application) : AndroidViewModel(application) {
     private val gaze = container.gaze
     private val aiConfig = container.aiConfig
     private val client = container.openAiClient
+    private val policy = container.policy
+    private val localVision = container.localVision
     private val permissions = container.permissions
 
     private val _uiState = MutableStateFlow(GazeUiState())
@@ -245,6 +253,18 @@ class GazeViewModel(application: Application) : AndroidViewModel(application) {
     fun toggleApiKeyVisibility() =
         _uiState.update { it.copy(isApiKeyVisible = !it.isApiKeyVisible) }
 
+    /** 切换识图来源：在线多模态 / 本地端侧。 */
+    fun onVisionSourceChange(source: VisionSource) {
+        _uiState.update { it.copy(draft = it.draft.copy(source = source), message = null) }
+    }
+
+    /** 选择本地识图的引擎。 */
+    fun onVisionEngineChange(engine: VisionEngineKind) {
+        _uiState.update {
+            it.copy(draft = it.draft.copy(localEngine = engine), message = null)
+        }
+    }
+
     fun saveVisionConfig() {
         val draft = _uiState.value.draft
         viewModelScope.launch {
@@ -271,6 +291,15 @@ class GazeViewModel(application: Application) : AndroidViewModel(application) {
      */
     fun testVisionConnection() {
         val draft = _uiState.value.draft
+
+        // 本地识图走一条完全不同的测试：真的对一张合成位图跑一次提取。
+        // 它回答的问题不一样 —— 云端测的是「地址 Key 模型名对不对」，
+        // 本地测的是「这套端侧链路在你这台机器上能不能跑通」。
+        if (draft.source == VisionSource.LOCAL) {
+            testLocalVisionEngine(draft)
+            return
+        }
+
         if (!draft.isUsable) {
             _uiState.update { it.copy(message = "先填地址和模型名", isMessageError = true) }
             return
@@ -348,5 +377,16 @@ class GazeViewModel(application: Application) : AndroidViewModel(application) {
     /** 从拉取结果里选一个填进模型名。 */
     fun pickVisionModel(model: String) {
         _uiState.update { it.copy(draft = it.draft.copy(model = model)) }
+    }
+
+    private companion object {
+        /**
+         * 本地识图测试的摘要长度上限。
+         *
+         * 用固定 40 字，而不是当前提示词档位的预算：测试的语义是「这套链路通不通」，
+         * 不是「这次注视的摘要会多长」。用一个随档位变化的数，会让同一次测试在不同
+         * 配置下给出不同长度的输出，反而看不清。
+         */
+        const val LOCAL_VISION_TEST_MAX_CHARS = 40
     }
 }

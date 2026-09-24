@@ -126,6 +126,9 @@ class LocalLlmClient(private val context: Context) {
             loadedPath = modelFile.absolutePath
             loadedBackend = backend
             Log.i(TAG, "端侧模型已加载：${modelFile.name}，后端 $backend")
+            // 显式的 Unit：块的最后一句是 Log.i（返回 Int），
+            // 少了它 runCatching 的类型会变成 Result<Int>，与声明的 Result<Unit> 对不上。
+            Unit
         }.recoverCatching { throwable ->
             // 把 OOM 与「文件坏了」翻译成人话。
             //

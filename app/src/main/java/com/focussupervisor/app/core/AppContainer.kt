@@ -9,6 +9,7 @@ import com.focussupervisor.app.core.backup.BackupManager
 import com.focussupervisor.app.core.network.OpenAiCompatibleClient
 import com.focussupervisor.app.core.notify.ProactiveNotifier
 import com.focussupervisor.app.core.permission.PermissionManager
+import com.focussupervisor.app.core.vision.LocalVisionEngine
 import com.focussupervisor.app.data.datastore.AppPreferencesDataSource
 import com.focussupervisor.app.data.mock.MockChatData
 import com.focussupervisor.app.data.repository.AiConfigRepository
@@ -194,6 +195,14 @@ class AppContainer(context: Context) {
         scope = appScope,
         engine = localLlmEngine,
     )
+
+    /**
+     * 端侧识图引擎。
+     *
+     * 无状态、不需要加载、不常驻内存 —— 每次识别用一次建一次的 ML Kit 识别器，
+     * 用完就关（十几 MB 的原生资源，而这个功能一次注视才跑一次）。
+     */
+    val localVision: LocalVisionEngine = LocalVisionEngine(appContext)
 
     /** 数据管理：备份导出与恢复。 */
     val backup: BackupManager = BackupManager(appContext)

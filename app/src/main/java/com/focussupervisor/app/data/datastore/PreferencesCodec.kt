@@ -22,6 +22,8 @@ import com.focussupervisor.app.domain.model.TimelineKind
 import com.focussupervisor.app.domain.model.TodoItem
 import com.focussupervisor.app.domain.model.UserPersona
 import com.focussupervisor.app.domain.model.VisionConfig
+import com.focussupervisor.app.domain.model.VisionEngineKind
+import com.focussupervisor.app.domain.model.VisionSource
 import com.focussupervisor.app.domain.model.WhitelistApp
 import org.json.JSONArray
 import java.util.Base64
@@ -205,6 +207,8 @@ internal object PreferencesCodec {
         put(FIELD_API_KEY, config.apiKey)
         put(FIELD_MODEL, config.model)
         put(FIELD_PROMPT, config.prompt)
+        put(FIELD_VISION_SOURCE, config.source.name)
+        put(FIELD_VISION_LOCAL_ENGINE, config.localEngine.name)
     }.toString()
 
     fun decodeVisionConfig(json: String?): VisionConfig {
@@ -217,6 +221,10 @@ internal object PreferencesCodec {
             // 空提问退回默认：空提问会让模型收到一张图却不知道该回答什么，
             // 得到的往往是「这是一张手机截图」这种零信息量的废话。
             prompt = obj.optString(FIELD_PROMPT).ifBlank { VisionConfig.DEFAULT_PROMPT },
+            // 老数据里没有这两个字段，默认值是「继续走在线多模态」，
+            // 也就是升级前后行为完全一致。
+            source = VisionSource.sanitize(obj.optString(FIELD_VISION_SOURCE)),
+            localEngine = VisionEngineKind.sanitize(obj.optString(FIELD_VISION_LOCAL_ENGINE)),
         )
     }
 
@@ -643,6 +651,10 @@ internal object PreferencesCodec {
     //      到底是哪个」变成需要翻代码才能回答的问题。
     private const val FIELD_AI_USE_LOCAL = "aiUseLocalModel"
     private const val FIELD_AI_LOCAL_MODEL = "aiLocalModelId"
+
+    // ---- 识图来源与本地引擎 -----------------------------------------------
+    private const val FIELD_VISION_SOURCE = "visionSource"
+    private const val FIELD_VISION_LOCAL_ENGINE = "visionLocalEngine"
 
     // ---- 聊天页外观 ---------------------------------------------------------
     private const val FIELD_PRESET_ID = "presetId"

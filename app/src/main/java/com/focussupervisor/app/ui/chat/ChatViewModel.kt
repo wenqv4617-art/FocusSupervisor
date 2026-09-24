@@ -253,6 +253,18 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     fun onDataManageSheetDismiss() = closeSheet(SheetTarget.DATA_MANAGE)
 
     /**
+     * 从「数据管理」跳到「资源管理」。
+     *
+     * 两步而不是把它塞进数据管理那一页：数据管理管的是**用户数据**
+     * （对话、记忆、待办、备份），资源管理管的是**可下载的模型**。
+     * 它们是两件事，只是都跟「磁盘」有关 —— 混在一页里会让那一页长到没人读完。
+     * 但入口放在数据管理里，因为用户找「占空间的东西」时先想到的是那里。
+     */
+    fun onOpenResources() = openSheet(SheetTarget.RESOURCES)
+
+    fun onResourceSheetDismiss() = closeSheet(SheetTarget.RESOURCES)
+
+    /**
      * 清空时间线。
      *
      * 只清事件记录，**不动对话与记忆** —— 用户想删的是「这段时间的监督流水」，
@@ -539,6 +551,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         GAZE,
         APPEARANCE,
         DATA_MANAGE,
+        RESOURCES,
     }
 
     private fun openDialog(dialog: ChatDialog) {
@@ -565,6 +578,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 isGazeSheetVisible = target == SheetTarget.GAZE,
                 isAppearanceSheetVisible = target == SheetTarget.APPEARANCE,
                 isDataManageSheetVisible = target == SheetTarget.DATA_MANAGE,
+                isResourceSheetVisible = target == SheetTarget.RESOURCES,
             )
         }
     }
@@ -580,6 +594,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 SheetTarget.GAZE -> it.copy(isGazeSheetVisible = false)
                 SheetTarget.APPEARANCE -> it.copy(isAppearanceSheetVisible = false)
                 SheetTarget.DATA_MANAGE -> it.copy(isDataManageSheetVisible = false)
+                SheetTarget.RESOURCES -> it.copy(isResourceSheetVisible = false)
             }
         }
     }
