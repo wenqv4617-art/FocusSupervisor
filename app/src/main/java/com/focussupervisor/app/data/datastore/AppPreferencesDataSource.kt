@@ -11,6 +11,7 @@ import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.focussupervisor.app.domain.model.AiPersona
+import com.focussupervisor.app.domain.model.ChatAppearance
 import com.focussupervisor.app.domain.model.AiPreset
 import com.focussupervisor.app.domain.model.ChatMessage
 import com.focussupervisor.app.domain.model.EmbeddingConfig
@@ -237,6 +238,69 @@ class AppPreferencesDataSource(context: Context) {
     }
 
     // -----------------------------------------------------------------------
+    // 聊天页外观
+    // -----------------------------------------------------------------------
+
+    suspend fun updateAppearance(appearance: ChatAppearance) {
+        val safe = ChatAppearance.sanitize(appearance)
+        dataStore.edit { prefs ->
+            prefs[KEY_APPEARANCE] = PreferencesCodec.encodeAppearance(safe)
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // 整份恢复（数据管理用）
+    // -----------------------------------------------------------------------
+
+    /**
+     * 用一份快照**整体覆盖**当前全部数据。
+     *
+     * ===========================================================================
+     * 为什么走 DataStore 的 edit，而不是直接拿备份文件覆盖 .preferences_pb
+     * ===========================================================================
+     * 「恢复备份」最直觉的做法是把 DataStore 的磁盘文件替换掉。**但那一定会出事**：
+     * DataStore 在进程内是常驻的，它持有内存中的状态与自己的写入队列，
+     * 你从外面换了文件，它下一次写入会把内存里的旧状态原样盖回去 ——
+     * 用户看到的现象是「恢复成功了，但一重启就变回原样」。
+     *
+     * 走 `edit` 就完全没有这个问题：它是 DataStore 认可的写入口，会走完整的
+     * 串行化与通知流程，恢复完所有监听者立刻拿到新数据，界面同步更新。
+     *
+     * 代价是恢复的粒度是「整份」而不是「某个键」。对一个备份功能来说，
+     * 整份覆盖本来也正是用户点那个按钮时期望的语义。
+     *
+     * `isSeeded` 一并恢复为 true：恢复完再让首次初始化逻辑跑一遍，
+     * 会把用户刚恢复的白名单和预置冲掉。
+     *
+     * @return 是否写入成功。失败通常是磁盘满或文件损坏。
+     */
+    suspend fun restoreAll(snapshot: AppPreferences): Boolean = runCatching {
+        dataStore.edit { prefs ->
+            prefs[KEY_WHITELIST] = PreferencesCodec.encodeWhitelist(snapshot.whitelist)
+            prefs[KEY_TODOS] = PreferencesCodec.encodeTodos(snapshot.todos)
+            prefs[KEY_AI_PRESETS] = PreferencesCodec.encodePresets(snapshot.presets)
+            prefs[KEY_AI_SELECTED_PRESET] = snapshot.selectedPresetId
+            prefs[KEY_EMBEDDING_CONFIG] =
+                PreferencesCodec.encodeEmbeddingConfig(snapshot.embeddingConfig)
+            prefs[KEY_VISION_CONFIG] = PreferencesCodec.encodeVisionConfig(snapshot.visionConfig)
+            prefs[KEY_GAZE_CONFIG] = PreferencesCodec.encodeGazeConfig(snapshot.gazeConfig)
+            prefs[KEY_AI_PERSONA] =
+                PreferencesCodec.encodeAiPersona(snapshot.aiPersona).toString()
+            prefs[KEY_USER_PERSONA] =
+                PreferencesCodec.encodeUserPersona(snapshot.userPersona).toString()
+            prefs[KEY_MEMORIES] = PreferencesCodec.encodeMemories(snapshot.memories)
+            prefs[KEY_MEMORY_INDEX] = PreferencesCodec.encodeIndex(snapshot.memoryIndex)
+            prefs[KEY_MESSAGES] = PreferencesCodec.encodeMessages(snapshot.messages)
+            prefs[KEY_TIMELINE] = PreferencesCodec.encodeTimeline(snapshot.timeline)
+            prefs[KEY_APPEARANCE] = PreferencesCodec.encodeAppearance(snapshot.appearance)
+            prefs[KEY_SEEDED] = true
+            prefs[KEY_SCHEMA_VERSION] = CURRENT_SCHEMA_VERSION
+        }
+    }.onFailure { throwable ->
+        Log.e(TAG, "恢复备份写入失败", throwable)
+    }.isSuccess
+
+    // -----------------------------------------------------------------------
     // 人设
     // -----------------------------------------------------------------------
 
@@ -390,6 +454,7 @@ class AppPreferencesDataSource(context: Context) {
         memoryIndex = PreferencesCodec.decodeIndex(this[KEY_MEMORY_INDEX]),
         messages = PreferencesCodec.decodeMessages(this[KEY_MESSAGES]),
         timeline = PreferencesCodec.decodeTimeline(this[KEY_TIMELINE]),
+        appearance = PreferencesCodec.decodeAppearance(this[KEY_APPEARANCE]),
         isSeeded = this[KEY_SEEDED] ?: false,
         schemaVersion = this[KEY_SCHEMA_VERSION] ?: 0,
     )
@@ -435,6 +500,7 @@ class AppPreferencesDataSource(context: Context) {
         private val KEY_MEMORY_INDEX = stringPreferencesKey("memory_index_json")
         private val KEY_MESSAGES = stringPreferencesKey("messages_json")
         private val KEY_TIMELINE = stringPreferencesKey("timeline_json")
+        private val KEY_APPEARANCE = stringPreferencesKey("appearance_json")
         private val KEY_SEEDED = booleanPreferencesKey("seeded")
         private val KEY_SCHEMA_VERSION = intPreferencesKey("schema_version")
     }
@@ -463,6 +529,7 @@ data class AppPreferences(
     val memoryIndex: List<IndexedDocument> = emptyList(),
     val messages: List<ChatMessage> = emptyList(),
     val timeline: List<TimelineEvent> = emptyList(),
+    val appearance: ChatAppearance = ChatAppearance(),
     val isSeeded: Boolean = false,
     val schemaVersion: Int = 0,
 )

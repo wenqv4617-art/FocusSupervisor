@@ -78,7 +78,7 @@ fun GazeSheet(
         onDismissRequest = onDismiss,
         modifier = modifier,
         sheetState = sheetState,
-        containerColor = FocusTheme.colors.chromeBackground,
+        containerColor = FocusTheme.colors.surfaceSheet,
         contentColor = FocusTheme.colors.textPrimary,
     ) {
         GazeContent(

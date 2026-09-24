@@ -2,31 +2,39 @@ package com.focussupervisor.app.core
 
 import android.content.Context
 import com.focussupervisor.app.core.ai.ConversationEngine
+import com.focussupervisor.app.core.ai.LocalEmbeddingEngine
 import com.focussupervisor.app.core.ai.ProactiveSupervisor
+import com.focussupervisor.app.core.backup.BackupManager
 import com.focussupervisor.app.core.network.OpenAiCompatibleClient
 import com.focussupervisor.app.core.notify.ProactiveNotifier
 import com.focussupervisor.app.core.permission.PermissionManager
 import com.focussupervisor.app.data.datastore.AppPreferencesDataSource
+import com.focussupervisor.app.data.mock.MockChatData
 import com.focussupervisor.app.data.repository.AiConfigRepository
 import com.focussupervisor.app.data.repository.AppLabelResolver
 import com.focussupervisor.app.data.repository.AppPolicyRepository
-import com.focussupervisor.app.data.repository.CriticalPackageResolver
-import com.focussupervisor.app.data.repository.DataStoreAiConfigRepository
+import com.focussupervisor.app.data.repository.AppearanceRepository
 import com.focussupervisor.app.data.repository.ConversationRepository
+import com.focussupervisor.app.data.repository.CriticalPackageResolver
+import com.focussupervisor.app.data.repository.DataMaintenanceRepository
+import com.focussupervisor.app.data.repository.DataStoreAiConfigRepository
 import com.focussupervisor.app.data.repository.DataStoreAppPolicyRepository
+import com.focussupervisor.app.data.repository.DataStoreAppearanceRepository
 import com.focussupervisor.app.data.repository.DataStoreConversationRepository
 import com.focussupervisor.app.data.repository.DataStoreGazeRepository
 import com.focussupervisor.app.data.repository.DataStoreMemoryRepository
 import com.focussupervisor.app.data.repository.DataStorePersonaRepository
 import com.focussupervisor.app.data.repository.DataStoreTimelineRepository
+import com.focussupervisor.app.data.repository.DefaultDataMaintenanceRepository
+import com.focussupervisor.app.data.repository.DefaultLocalModelRepository
 import com.focussupervisor.app.data.repository.GazeRepository
 import com.focussupervisor.app.data.repository.InMemoryPromptCacheRepository
+import com.focussupervisor.app.data.repository.LocalModelRepository
 import com.focussupervisor.app.data.repository.MemoryRepository
 import com.focussupervisor.app.data.repository.PersonaRepository
 import com.focussupervisor.app.data.repository.PromptCacheRepository
 import com.focussupervisor.app.data.repository.TimelineRepository
 import com.focussupervisor.app.data.repository.buildBuiltInWhitelist
-import com.focussupervisor.app.data.mock.MockChatData
 import com.focussupervisor.app.domain.model.AiPresetDefaults
 import com.focussupervisor.app.ui.overlay.LockOverlayController
 import kotlinx.coroutines.CoroutineScope
@@ -143,6 +151,46 @@ class AppContainer(context: Context) {
      */
     val promptCache: PromptCacheRepository = InMemoryPromptCacheRepository()
 
+    /** 聊天页外观：主题预设、背景图、样式注入。 */
+    val appearance: AppearanceRepository = DataStoreAppearanceRepository(
+        context = appContext,
+        preferences = preferences,
+        scope = appScope,
+    )
+
+    /**
+     * 本地向量引擎（ONNX Runtime）。
+     *
+     * 进程内唯一：加载一次模型要一两秒、常驻几十 MB 内存，每次用都新建是不可接受的。
+     *
+     * 注意这里只**创建**它，并不加载模型 —— 真正的加载由 [localModel] 在
+     * 「确保引擎可用」时触发。所以从没下过模型的用户，在这个对象上付出的
+     * 内存与时间代价都是零。
+     */
+    val localEmbedding: LocalEmbeddingEngine = LocalEmbeddingEngine(appContext)
+
+    /** 本地向量模型：下载、续传、校验、加载。 */
+    val localModel: LocalModelRepository = DefaultLocalModelRepository(
+        context = appContext,
+        scope = appScope,
+        engine = localEmbedding,
+    )
+
+    /** 数据管理：备份导出与恢复。 */
+    val backup: BackupManager = BackupManager(appContext)
+
+    /**
+     * 数据管理的业务入口。
+     *
+     * 把 [backup] 与 DataStore 包在一起：恢复要同时写磁盘上的背景图和 DataStore 里的
+     * 全部配置，这两步的原子性由它保证，界面不必知道有两个存储。
+     */
+    val dataMaintenance: DataMaintenanceRepository = DefaultDataMaintenanceRepository(
+        context = appContext,
+        preferences = preferences,
+        backupManager = backup,
+    )
+
     /**
      * 全屏遮罩控制器。
      *
@@ -174,6 +222,7 @@ class AppContainer(context: Context) {
         timeline = timeline,
         cache = promptCache,
         gaze = gaze,
+        localModel = localModel,
     )
 
     /**

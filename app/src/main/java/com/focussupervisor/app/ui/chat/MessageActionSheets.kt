@@ -61,7 +61,7 @@ fun MessageActionSheet(
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = FocusTheme.colors.chromeBackground,
+        containerColor = FocusTheme.colors.surfaceSheet,
         contentColor = FocusTheme.colors.textPrimary,
     ) {
         Column(
@@ -138,7 +138,7 @@ fun MessageEditDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        containerColor = FocusTheme.colors.chromeBackground,
+        containerColor = FocusTheme.colors.surfaceSheet,
         title = {
             Text(
                 text = "编辑消息",
@@ -211,7 +211,7 @@ fun MessageDeleteDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        containerColor = FocusTheme.colors.chromeBackground,
+        containerColor = FocusTheme.colors.surfaceSheet,
         title = {
             Text(
                 text = "删除这条消息？",

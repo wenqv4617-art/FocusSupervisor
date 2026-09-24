@@ -6,6 +6,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -20,7 +21,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import com.focussupervisor.app.ui.theme.FocusTheme
+import com.focussupervisor.app.ui.theme.ChatTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -47,6 +48,7 @@ fun Avatar(
     name: String,
     modifier: Modifier = Modifier,
     size: Dp = MessageAvatarSize,
+    round: Boolean = false,
 ) {
     val bitmap by produceState<ImageBitmap?>(initialValue = null, path) {
         value = withContext(Dispatchers.IO) {
@@ -55,8 +57,10 @@ fun Avatar(
         }
     }
 
-    // 微信的头像是「方中带圆」的小圆角方块，不是正圆。沿用。
-    val shape = RoundedCornerShape(size * 0.12f)
+    // 微信的头像是「方中带圆」的小圆角方块，不是正圆，所以默认沿用方块。
+    // 「捡手机文学」那类主题用的是正圆头像，由皮肤把 round 打开 ——
+    // 头像形状和气泡圆角一样，属于「这套主题长什么样」的一部分。
+    val shape = if (round) CircleShape else RoundedCornerShape(size * 0.12f)
 
     Box(
         modifier = modifier
@@ -77,7 +81,7 @@ fun Avatar(
             Text(
                 text = name.trim().take(1).ifEmpty { "·" },
                 style = MaterialTheme.typography.bodyMedium,
-                color = FocusTheme.colors.textPrimary,
+                color = ChatTheme.skin.textPrimary,
             )
         }
     }
@@ -98,10 +102,10 @@ private fun fallbackColorFor(name: String): androidx.compose.ui.graphics.Color {
 }
 
 private val FALLBACK_PALETTE = listOf(
-    androidx.compose.ui.graphics.Color(0xFFD8DED6),
-    androidx.compose.ui.graphics.Color(0xFFD6DCE0),
-    androidx.compose.ui.graphics.Color(0xFFE0DAD2),
-    androidx.compose.ui.graphics.Color(0xFFD5D8DE),
-    androidx.compose.ui.graphics.Color(0xFFDDE0D8),
-    androidx.compose.ui.graphics.Color(0xFFE2E2E2),
+    androidx.compose.ui.graphics.Color(0xFFD8F3EA),
+    androidx.compose.ui.graphics.Color(0xFFDCEAFB),
+    androidx.compose.ui.graphics.Color(0xFFE8E2F9),
+    androidx.compose.ui.graphics.Color(0xFFFBE1E7),
+    androidx.compose.ui.graphics.Color(0xFFE6ECEF),
+    androidx.compose.ui.graphics.Color(0xFFEDEDED),
 )

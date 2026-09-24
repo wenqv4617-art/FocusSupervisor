@@ -164,6 +164,12 @@ dependencies {
     implementation(libs.androidx.camera.lifecycle)
     implementation(libs.mlkit.face.detection)
 
+    // ---- 本地向量模型 --------------------------------------------------------
+    // ONNX Runtime 负责跑下载到本机的 all-MiniLM-L6-v2 量化模型。
+    // 只在用户主动下载并启用本地模型时才会被加载，但**库本身必须在包里** ——
+    // 运行时装一个 native 库是做不到的。体积代价见 libs.versions.toml 的注释。
+    implementation(libs.onnxruntime.android)
+
     // ---- 生命周期 / ViewModel ----------------------------------------------
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.runtime.compose)   // collectAsStateWithLifecycle

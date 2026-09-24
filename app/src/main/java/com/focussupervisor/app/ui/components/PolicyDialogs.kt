@@ -79,7 +79,7 @@ fun PermissionCheckDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        containerColor = FocusTheme.colors.chromeBackground,
+        containerColor = FocusTheme.colors.surfaceSheet,
         title = {
             Text(
                 text = "权限检查",
@@ -216,7 +216,7 @@ fun PolicyStatusDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        containerColor = FocusTheme.colors.chromeBackground,
+        containerColor = FocusTheme.colors.surfaceSheet,
         title = {
             Text(
                 text = "待办与白名单",

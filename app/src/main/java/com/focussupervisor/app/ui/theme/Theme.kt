@@ -63,7 +63,78 @@ data class FocusColors(
     val accentDisabled: Color,
     /** 提醒色：面板红点、逾期待办。 */
     val attention: Color,
+
+    // -----------------------------------------------------------------------
+    // 面板层
+    //
+    // 见 Palette.kt 的类注释：面板不模仿任何现成应用，它要的是结构感，
+    // 所以单独有一组淡彩 + 卡片语义色。
+    //
+    // 这几个字段都带默认值：新增字段时不必回头改每一处构造点，默认值就是浅色版。
+    // 但 Light/Dark 两个实例仍然显式写了值 —— 默认值只是编译期的兜底，
+    // 不承担实际配色。
+    // -----------------------------------------------------------------------
+
+    /** 面板底。 */
+    val surfaceSheet: Color = SheetSurface,
+    /** 卡片底。 */
+    val surfaceCard: Color = CardSurface,
+    /** 卡片内的次级块。 */
+    val surfaceCardMuted: Color = CardSurfaceMuted,
+    /** 卡片描边。 */
+    val cardBorder: Color = CardBorder,
+    /** 磨砂层。 */
+    val frostTint: Color = FrostTint,
+    /** 薄荷：正常 / 已完成 / 本地可用。 */
+    val pastelMint: Color = PastelMint,
+    val pastelMintInk: Color = PastelMintInk,
+    /** 天青：说明 / 中性信息。 */
+    val pastelSky: Color = PastelSky,
+    val pastelSkyInk: Color = PastelSkyInk,
+    /** 藕荷：可选 / 自定义。 */
+    val pastelLilac: Color = PastelLilac,
+    val pastelLilacInk: Color = PastelLilacInk,
+    /** 藕粉：危险 / 删除。 */
+    val pastelBlush: Color = PastelBlush,
+    val pastelBlushInk: Color = PastelBlushInk,
 )
+
+/**
+ * 淡彩语义色的成套取用入口。
+ *
+ * 面板里到处是「一块淡彩底 + 同色系深字」的小标签，写成两个字段容易配错对。
+ * 打包成一个枚举取，配色就只有一处定义。
+ */
+enum class PastelTone {
+    /** 薄荷：正常、已完成。 */
+    MINT,
+
+    /** 天青：说明、提示。 */
+    SKY,
+
+    /** 藕荷：可选、自定义。 */
+    LILAC,
+
+    /** 藕粉：危险、删除。 */
+    BLUSH,
+    ;
+
+    /** 取这一支的淡彩底。 */
+    fun surface(colors: FocusColors): Color = when (this) {
+        MINT -> colors.pastelMint
+        SKY -> colors.pastelSky
+        LILAC -> colors.pastelLilac
+        BLUSH -> colors.pastelBlush
+    }
+
+    /** 取这一支的墨色（写在淡彩底上的文字色）。 */
+    fun ink(colors: FocusColors): Color = when (this) {
+        MINT -> colors.pastelMintInk
+        SKY -> colors.pastelSkyInk
+        LILAC -> colors.pastelLilacInk
+        BLUSH -> colors.pastelBlushInk
+    }
+}
 
 /** 浅色实例（默认值，同时也是 Preview 的兜底值）。 */
 private val LightFocusColors = FocusColors(
@@ -81,6 +152,19 @@ private val LightFocusColors = FocusColors(
     accent = Accent,
     accentDisabled = AccentDisabled,
     attention = Attention,
+    surfaceSheet = SheetSurface,
+    surfaceCard = CardSurface,
+    surfaceCardMuted = CardSurfaceMuted,
+    cardBorder = CardBorder,
+    frostTint = FrostTint,
+    pastelMint = PastelMint,
+    pastelMintInk = PastelMintInk,
+    pastelSky = PastelSky,
+    pastelSkyInk = PastelSkyInk,
+    pastelLilac = PastelLilac,
+    pastelLilacInk = PastelLilacInk,
+    pastelBlush = PastelBlush,
+    pastelBlushInk = PastelBlushInk,
 )
 
 /** 深色实例。 */
@@ -99,6 +183,19 @@ private val DarkFocusColors = FocusColors(
     accent = Accent,
     accentDisabled = AccentDisabled,
     attention = DarkAttention,
+    surfaceSheet = DarkSheetSurface,
+    surfaceCard = DarkCardSurface,
+    surfaceCardMuted = DarkCardSurfaceMuted,
+    cardBorder = DarkCardBorder,
+    frostTint = DarkFrostTint,
+    pastelMint = DarkPastelMint,
+    pastelMintInk = DarkPastelMintInk,
+    pastelSky = DarkPastelSky,
+    pastelSkyInk = DarkPastelSkyInk,
+    pastelLilac = DarkPastelLilac,
+    pastelLilacInk = DarkPastelLilacInk,
+    pastelBlush = DarkPastelBlush,
+    pastelBlushInk = DarkPastelBlushInk,
 )
 
 /**

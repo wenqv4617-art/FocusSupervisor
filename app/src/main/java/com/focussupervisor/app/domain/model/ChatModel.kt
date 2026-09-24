@@ -153,6 +153,10 @@ data class ChatUiState(
     val messageDeleteTarget: ChatMessage? = null,
     val isTimelineSheetVisible: Boolean = false,
     val isGazeSheetVisible: Boolean = false,
+    /** 聊天页美化面板是否展开。 */
+    val isAppearanceSheetVisible: Boolean = false,
+    /** 数据管理面板是否展开。 */
+    val isDataManageSheetVisible: Boolean = false,
     val timelineEvents: List<TimelineEvent> = emptyList(),
     val nowMillis: Long = System.currentTimeMillis(),
 ) {

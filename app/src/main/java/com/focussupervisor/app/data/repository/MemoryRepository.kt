@@ -333,16 +333,42 @@ class DataStoreMemoryRepository(
             return 0
         }
 
+        // 维度一致性检查。
+        //
+        // 用户随时可能换向量模型（在线 1536 维 → 本地 384 维，或者反过来）。
+        // 不同模型给出的向量来自**不同的语义空间**，余弦相似度在它们之间恒为 0 ——
+        // 留着不会报错，只会让「记忆召回越来越差」变成一个查不出原因的现象。
+        // 所以一旦发现维度变了，就把旧向量整批清空，让它们重新排回补向量队列。
+        val dimension = vectors.firstOrNull()?.size ?: 0
+        val staleDocIds: Set<String> = if (dimension > 0) {
+            prefs.memoryIndex
+                .filter { it.embedding.isNotEmpty() && it.embedding.size != dimension }
+                .mapTo(mutableSetOf()) { it.id }
+        } else {
+            emptySet()
+        }
+        if (staleDocIds.isNotEmpty()) {
+            Log.i(TAG, "向量维度变为 $dimension，清理 ${staleDocIds.size} 条旧向量并重新计算")
+        }
+
         val vectorsById = pending.mapIndexed { index, doc -> doc.id to vectors[index] }.toMap()
         val updated = prefs.memoryIndex.map { doc ->
             val vector = vectorsById[doc.id]
-            if (vector == null || vector.isEmpty()) doc else doc.copy(embedding = vector)
+            when {
+                vector != null && vector.isNotEmpty() -> doc.copy(embedding = vector)
+                doc.id in staleDocIds -> doc.copy(embedding = emptyList())
+                else -> doc
+            }
         }
 
         // 记忆条目自己也留一份向量：这样即使索引被淘汰，记忆仍能参与向量召回。
         val updatedMemories = prefs.memories.map { entry ->
             val vector = vectorsById[memoryDocId(entry.id)]
-            if (vector == null || vector.isEmpty()) entry else entry.copy(embedding = vector)
+            when {
+                vector != null && vector.isNotEmpty() -> entry.copy(embedding = vector)
+                memoryDocId(entry.id) in staleDocIds -> entry.copy(embedding = emptyList())
+                else -> entry
+            }
         }
 
         val embeddedCount = vectorsById.values.count { it.isNotEmpty() }

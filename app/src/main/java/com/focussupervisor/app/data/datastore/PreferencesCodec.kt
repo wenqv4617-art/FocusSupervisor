@@ -4,6 +4,8 @@ import android.util.Log
 import com.focussupervisor.app.domain.model.AiConfig
 import com.focussupervisor.app.domain.model.AiPersona
 import com.focussupervisor.app.domain.model.AiPreset
+import com.focussupervisor.app.domain.model.BackgroundMode
+import com.focussupervisor.app.domain.model.ChatAppearance
 import com.focussupervisor.app.domain.model.ChatMessage
 import com.focussupervisor.app.domain.model.EmbeddingConfig
 import com.focussupervisor.app.domain.model.GazeConfig
@@ -172,6 +174,7 @@ internal object PreferencesCodec {
         put(FIELD_BASE_URL, config.baseUrl)
         put(FIELD_API_KEY, config.apiKey)
         put(FIELD_MODEL, config.model)
+        put(FIELD_USE_LOCAL_MODEL, config.useLocalModel)
     }.toString()
 
     fun decodeEmbeddingConfig(json: String?): EmbeddingConfig {
@@ -181,6 +184,9 @@ internal object PreferencesCodec {
             baseUrl = obj.optString(FIELD_BASE_URL),
             apiKey = obj.optString(FIELD_API_KEY),
             model = obj.optString(FIELD_MODEL),
+            // 老数据里没有这个字段，optBoolean 的默认值 false 正好是「继续用在线端点」，
+            // 也就是升级前后行为不变。
+            useLocalModel = obj.optBoolean(FIELD_USE_LOCAL_MODEL, false),
         )
     }
 
@@ -251,6 +257,49 @@ internal object PreferencesCodec {
                 .toFloat().coerceIn(MIN_TOLERANCE_DEGREES, MAX_TOLERANCE_DEGREES),
             eyeOpenThreshold = obj.optDouble(FIELD_EYE_OPEN, defaults.eyeOpenThreshold.toDouble())
                 .toFloat().coerceIn(0f, 1f),
+        )
+    }
+
+    // =======================================================================
+    // 聊天页外观
+    // =======================================================================
+
+    fun encodeAppearance(appearance: ChatAppearance): String = JSONObject().apply {
+        put(FIELD_PRESET_ID, appearance.presetId)
+        put(FIELD_BACKGROUND_MODE, appearance.backgroundMode.name)
+        put(FIELD_BACKGROUND_IMAGE, appearance.backgroundImagePath ?: JSONObject.NULL)
+        put(FIELD_BACKGROUND_OPACITY, appearance.backgroundImageOpacity.toDouble())
+        put(FIELD_BACKGROUND_COLOR, appearance.backgroundSolidColor ?: JSONObject.NULL)
+        put(FIELD_STYLE_SHEET, appearance.styleSheet)
+    }.toString()
+
+    /**
+     * 解析聊天页外观。
+     *
+     * 这里**必须**过一遍 [ChatAppearance.sanitize]：这份数据可能来自用户手改过的
+     * 备份文件，一个越界的透明度或者一个不存在的主题 id 都足以让聊天页渲染得
+     * 莫名其妙，而且很难归因。收敛放在解析处，调用方就不必各自设防。
+     */
+    fun decodeAppearance(json: String?): ChatAppearance {
+        if (json.isNullOrBlank()) return ChatAppearance()
+        val obj = runCatching { JSONObject(json) }.getOrNull() ?: return ChatAppearance()
+
+        val solidColor = if (obj.isNull(FIELD_BACKGROUND_COLOR)) {
+            null
+        } else {
+            obj.optLong(FIELD_BACKGROUND_COLOR).takeIf { it != 0L }
+        }
+
+        return ChatAppearance.sanitize(
+            ChatAppearance(
+                presetId = obj.optString(FIELD_PRESET_ID),
+                backgroundMode = BackgroundMode.sanitize(obj.optString(FIELD_BACKGROUND_MODE)),
+                backgroundImagePath = obj.optString(FIELD_BACKGROUND_IMAGE)
+                    .takeIf { it.isNotBlank() },
+                backgroundImageOpacity = obj.optDouble(FIELD_BACKGROUND_OPACITY, 1.0).toFloat(),
+                backgroundSolidColor = solidColor,
+                styleSheet = obj.optString(FIELD_STYLE_SHEET),
+            ),
         )
     }
 
@@ -581,6 +630,15 @@ internal object PreferencesCodec {
     private const val FIELD_YAW = "yawToleranceDegrees"
     private const val FIELD_PITCH = "pitchToleranceDegrees"
     private const val FIELD_EYE_OPEN = "eyeOpenThreshold"
+    private const val FIELD_USE_LOCAL_MODEL = "useLocalModel"
+
+    // ---- 聊天页外观 ---------------------------------------------------------
+    private const val FIELD_PRESET_ID = "presetId"
+    private const val FIELD_BACKGROUND_MODE = "backgroundMode"
+    private const val FIELD_BACKGROUND_IMAGE = "backgroundImagePath"
+    private const val FIELD_BACKGROUND_OPACITY = "backgroundImageOpacity"
+    private const val FIELD_BACKGROUND_COLOR = "backgroundSolidColor"
+    private const val FIELD_STYLE_SHEET = "styleSheet"
 
     /** 头部姿态容差的合法区间：小于 5 度几乎永远判不成注视，大于 45 度等于没判。 */
     private const val MIN_TOLERANCE_DEGREES = 5f

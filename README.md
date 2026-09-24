@@ -1,8 +1,9 @@
 # FocusSupervisor
 
-AI 监督自律 App。当前处于**阶段七**：AI 有了「主动人格」—— 会在**他正在看屏幕时**
-主动开口盘问（拦截狂暴、连续注视、离开又回来、待办临期四类触发），并配齐了待办闭环
-与按日历天翻页的隔天机制。
+AI 监督自律 App。当前处于**阶段八**：从「能用」走向「愿意用」——聊天页可以换主题、
+铺自己的背景图、注入一段样式；数据可以整份导出成备份（超过 8MB 自动分片）再恢复；
+向量化多了一条**完全离线**的路：把 all-MiniLM-L6-v2 量化模型下到手机里自己算。
+同时把面板层重做了一套淡彩卡片视觉。
 
 ---
 
@@ -16,7 +17,8 @@ AI 监督自律 App。当前处于**阶段七**：AI 有了「主动人格」—
 | 四 | 对话链路、人设、分层记忆、指令上屏、TodoList 注入 | 已完成 |
 | 五 | 固定签名密钥、时间感知、监督时间线 | 已完成 |
 | 六 | 小窗/画中画拦截、端侧注视监控（CameraX + ML Kit） | 已完成 |
-| 七 | 主动盘问引擎、跨天机制、待办闭环 | 当前 |
+| 七 | 主动盘问引擎、跨天机制、待办闭环 | 已完成 |
+| 八 | 聊天页美化（主题 + 背景图 + 样式注入）、数据管理与分片备份、本地向量模型、面板淡彩重做 | 当前 |
 
 ## 交付物一览
 
@@ -34,6 +36,7 @@ AI 监督自律 App。当前处于**阶段七**：AI 有了「主动人格」—
 | 无障碍运行期配置（含 canTakeScreenshot） | `app/src/main/res/xml/accessibility_service_config.xml` |
 | 只放行回环地址的明文 HTTP | `app/src/main/res/xml/network_security_config.xml` |
 | 启动图标生成器 | `tools/generate_icons.mjs` |
+| 本地向量模型的词表（BERT WordPiece，30522 条，231KB，内置进 APK） | `app/src/main/assets/vocab.txt` |
 
 ### 领域契约（纯 Kotlin，不依赖 Android 框架）
 
@@ -47,6 +50,7 @@ AI 监督自律 App。当前处于**阶段七**：AI 有了「主动人格」—
 | AI 与用户的人设 | `app/src/main/java/com/focussupervisor/app/domain/model/PersonaModels.kt` |
 | 监督时间线的事件类型与容量取舍 | `app/src/main/java/com/focussupervisor/app/domain/model/TimelineModels.kt` |
 | 注视监控配置与 VisionStatus | `app/src/main/java/com/focussupervisor/app/domain/model/GazeModels.kt` |
+| 聊天页外观、样式注入的解析结果 | `app/src/main/java/com/focussupervisor/app/domain/model/AppearanceModels.kt` |
 
 ### 数据层
 
@@ -65,6 +69,9 @@ AI 监督自律 App。当前处于**阶段七**：AI 有了「主动人格」—
 | 最近一次请求的缓存命中情况（纯内存） | `app/src/main/java/com/focussupervisor/app/data/repository/PromptCacheRepository.kt` |
 | 设备关键应用与桌面/输入法的运行时解析 | `app/src/main/java/com/focussupervisor/app/data/repository/CriticalPackages.kt` |
 | 首次启动的开场白（唯一一处示例内容） | `app/src/main/java/com/focussupervisor/app/data/mock/MockChatData.kt` |
+| 聊天页外观仓库（主题 / 背景图落盘 / 样式文本） | `app/src/main/java/com/focussupervisor/app/data/repository/AppearanceRepository.kt` |
+| 本地向量模型仓库（下载状态机 + 引擎加载） | `app/src/main/java/com/focussupervisor/app/data/repository/LocalModelRepository.kt` |
+| 数据管理仓库（体量统计 + 导出 + 恢复的原子性） | `app/src/main/java/com/focussupervisor/app/data/repository/DataMaintenanceRepository.kt` |
 
 ### 能力层（core）
 
@@ -83,6 +90,12 @@ AI 监督自律 App。当前处于**阶段七**：AI 有了「主动人格」—
 | CameraX + ML Kit 取帧分析 | `app/src/main/java/com/focussupervisor/app/core/vision/GazeAnalyzer.kt` |
 | 截屏能力通道（无障碍 → 注视监控） | `app/src/main/java/com/focussupervisor/app/core/vision/ScreenCaptureProvider.kt` |
 | 主动提醒的触达（通知 + 震动） | `app/src/main/java/com/focussupervisor/app/core/notify/ProactiveNotifier.kt` |
+| 样式注入解析器（类 CSS 子集，全程手写扫描不用正则） | `app/src/main/java/com/focussupervisor/app/core/style/StyleInjector.kt` |
+| 备份的正文编解码（JSON，复用 PreferencesCodec） | `app/src/main/java/com/focussupervisor/app/core/backup/BackupCodec.kt` |
+| 备份打包与恢复（zip + 分片 + 目录枚举） | `app/src/main/java/com/focussupervisor/app/core/backup/BackupManager.kt` |
+| 模型下载器（断点续传 + 进度流 + SHA-256 校验） | `app/src/main/java/com/focussupervisor/app/core/model/LocalModelDownloader.kt` |
+| BERT WordPiece 分词器（中文按字、英文按最长匹配） | `app/src/main/java/com/focussupervisor/app/core/ai/WordPieceTokenizer.kt` |
+| 本地向量引擎（ONNX Runtime + mean pooling + L2 归一化） | `app/src/main/java/com/focussupervisor/app/core/ai/LocalEmbeddingEngine.kt` |
 
 ### 系统服务
 
@@ -118,6 +131,15 @@ AI 监督自律 App。当前处于**阶段七**：AI 有了「主动人格」—
 | 注视监控的状态与拉取模型 | `app/src/main/java/com/focussupervisor/app/ui/settings/GazeViewModel.kt` |
 | 全屏防沉迷遮罩 | `app/src/main/java/com/focussupervisor/app/ui/overlay/LockOverlayController.kt` |
 | 消息与待办的时间格式（跨天补日期） | `app/src/main/java/com/focussupervisor/app/ui/util/TimeFormat.kt` |
+| 面板淡彩色板（薄荷 / 天青 / 藕荷 / 藕粉） | `app/src/main/java/com/focussupervisor/app/ui/theme/Palette.kt` |
+| 聊天皮肤：与面板色板解耦的一层主题槽位 | `app/src/main/java/com/focussupervisor/app/ui/theme/ChatSkin.kt` |
+| 三套预置主题与「主题 + 注入」的合成规则 | `app/src/main/java/com/focussupervisor/app/ui/theme/ChatPresets.kt` |
+| 聊天页美化面板（预览 / 主题 / 背景 / 样式注入） | `app/src/main/java/com/focussupervisor/app/ui/settings/AppearanceSheet.kt` |
+| 美化面板的状态持有者 | `app/src/main/java/com/focussupervisor/app/ui/settings/AppearanceViewModel.kt` |
+| 数据管理面板（概览 / 导出 / 恢复确认） | `app/src/main/java/com/focussupervisor/app/ui/settings/DataManageSheet.kt` |
+| 数据管理面板的状态持有者 | `app/src/main/java/com/focussupervisor/app/ui/settings/DataManageViewModel.kt` |
+| 背景图裁剪（拖动 + 捏合缩放，自绘不引库） | `app/src/main/java/com/focussupervisor/app/ui/components/ImageCropScreen.kt` |
+| 按路径异步加载图片（解码不进主线程） | `app/src/main/java/com/focussupervisor/app/ui/components/FileImage.kt` |
 
 ---
 
@@ -126,6 +148,7 @@ AI 监督自律 App。当前处于**阶段七**：AI 有了「主动人格」—
 - Kotlin 2.0.21 / Jetpack Compose（BOM 2024.12.01）/ Material 3
 - Preferences DataStore 1.1.7（持久化）+ OkHttp 4.12.0（网络）
 - CameraX 1.4.2（取帧）+ ML Kit 人脸检测 16.1.7（模型打包版）
+- ONNX Runtime 1.20.0（`onnxruntime-android`）：在手机上跑本地向量模型
 - AGP 8.7.3，Gradle 8.11.1，JDK 17
 - `compileSdk = 35`，`minSdk = 26`，`targetSdk = 35`
 - Clean Architecture 分层：`domain` / `data` / `core` / `ui` / `service`
@@ -567,13 +590,193 @@ Android 9 起后台应用不能访问摄像头，唯一例外是**带着 `camera
 判据统一收在 `TimeNarrator.dayKey`，所有需要「每天重置一次」的地方都存一个 key 比对，
 不会出现两处各写一套的情况。
 
+## 聊天页美化：三套主题、一张背景图、一段样式
+
+「+」→「聊天美化」。三块内容按「影响面从大到小」排：主题 → 背景 → 样式注入。
+
+### 主题：换的不只是颜色
+
+| 主题 | 底色 | 我的气泡 | 结构 |
+| --- | --- | --- | --- |
+| 跟随应用明暗 | 跟面板走 | 微信绿 + 深字 | 大圆角 + 头像 + 姓名 |
+| 默认日间微信 | 中性灰 `#EDEDED` | 微信绿 `#95EC69` | 大圆角 + 头像 + 姓名 |
+| 仿 iMessage | 纯白 | 蓝底白字 `#0B84FF` | 全圆角、**无头像无姓名**、时间戳居中 |
+| 捡手机文学 | 蓝灰 `#B4C0CE` | 黄底深字 `#FFD75E` | 小圆角 + 圆头像、不显示姓名 |
+
+注意第三、四行里的「无头像无姓名」「时间戳居中」。**只换颜色是做不出 iMessage 的** ——
+用户一眼就知道那还是「一个染了蓝的微信」。所以皮肤里除了颜色还带圆角、头像与姓名
+的开关、气泡最大宽度，这些一起构成「这套主题长什么样」。
+
+### 主题和面板是两层，不是一套
+
+面板（向量模型、记忆、AI 配置……）读的是 `FocusTheme.colors`，聊天页读的是
+`ChatTheme.skin`。两者**故意不共用**：把气泡换成 iMessage 的蓝时，配置面板不该跟着变蓝。
+皮肤通过 `LocalChatSkin` 只挂在聊天页那棵子树上。
+
+### 背景图：选图 → 裁剪 → 透明度
+
+1. 从系统相册选一张（`GetContent`，不需要任何存储权限）；
+2. 全屏裁剪：拖动移动、双指捏合缩放，框里看到的就是聊天页上会看到的部分。
+   裁剪框固定 0.62 宽高比 —— 宁可窄不要宽，宽的图铺上去会被裁掉上下，
+   而人像与主体通常在画面中间偏上；
+3. 透明度滑块：**下限 5% 而不是 0**。完全透明等于「我明明设了图却什么都看不到」，
+   那是个只会让人以为坏了的状态。
+
+原图会先降采样到最长边 1440 再裁剪，结果写进应用私有目录（`filesDir/chat_background.jpg`），
+不会往相册里再复制一份。裁剪后先写临时文件再改名 —— 中途失败时用户原来那张图还在。
+
+### 样式注入：先说清楚它不是什么
+
+**Compose 没有 CSS。** 它是一棵强类型节点树，没有「样式表 + 文档树 + 选择器匹配引擎」
+这套架构。想在 Compose 上做真正的 CSS 注入，等于在应用里重新实现一个 CSS 引擎。
+
+所以这里实现的是一份**明确划定的子集**，而界面会把「哪句生效了、哪句没认出来、为什么」
+逐条列出来 —— 用户写错时不需要猜：
+
+```
+.chat            { background: #EDEDED; }   /* 聊天区背景 */
+.bubble-user     { background: #95EC69; color: #191919; }
+.bubble-ai       { background: #FFFFFF; }
+.system-pill     { background: #D6D6D6; color: #6E6E6E; }
+.bubble          { border-radius: 14px; max-width: 72%; }
+.avatar          { display: none; }        /* 藏掉头像 */
+```
+
+认得的属性只有 `background` / `color` / `border-radius` / `max-width` / `display`。
+界面里有「复制模板」和「复制类名」两个按钮，模板是一份能直接改的完整示例。
+
+**解析器全程手写扫描，一个正则都没用。** 这个项目已经在正则上栽过一次：Android 的
+正则引擎是 ICU，它把 `\{.*?}` 里那个没有量词开头的 `}` 判成语法错误，而同样的写法在 JVM
+上完全合法 —— 结果是「本机编译通过、真机一启动就崩」。CSS 的解析天然满是花括号，
+继续用正则就是再赌一次同一种运气。`indexOf('{')` 在两个平台上行为完全一致。
+
+---
+
+## 数据管理：备份、分片、恢复
+
+「+」→「数据管理」。
+
+### 备份包里是什么
+
+```
+focus-backup-20260924-0130.zip
+├── manifest.json          清单：时间、版本、条数、分片数、正文摘要
+├── data.json              全部数据（白名单/待办/预设/人设/记忆/向量/对话/时间线/外观）
+└── chat_background.jpg    自定义聊天背景（设过才有）
+```
+
+正文是 **JSON 而不是 DataStore 的 protobuf 二进制**。二进制块没法校验、没法手看，
+而且和 DataStore 的内部实现绑死。JSON 可读、可校验，恢复时也能走正常的写入口。
+
+### 超过 8MB 自动分片
+
+向量是最占地方的：384 维浮点，一条记忆序列化后几个 KB，上千条记忆的索引就是好几 MB。
+一次性写一个几十 MB 的文件在手机上会遇到两个很现实的问题：**写一半没空间**
+（走到最后一步才失败，用户白等半分钟还什么都没得到），以及**传不出去**
+（聊天软件对单个附件都有大小限制）。所以超过 8MB 就切成 `.part001`、`.part002`……
+分片切的是**已经压好的 zip 字节**，所以每一片都不是有效 zip，必须按顺序拼回来。
+
+### 恢复是两步，中间那步不能省
+
+```
+选文件夹 → 读出来（只读）→ 给用户看清单 → 确认 → 才真正写入
+```
+
+恢复会覆盖掉当前全部数据且不可撤销。中间那一步「这是什么时候导出的、里面有多少条
+对话和记忆」，是这个功能里唯一能防止误操作的地方。
+
+写入走的是 DataStore 的 `edit`，**不是**拿备份文件覆盖 `.preferences_pb`。
+后者一定会出事：DataStore 在进程内是常驻的，你从外面换了文件，它下一次写入会把内存
+里的旧状态原样盖回去 —— 用户看到的现象是「恢复成功，但一重启就变回原样」。
+
+### 导出到哪儿
+
+- **Android 10+**：系统「下载 / FocusSupervisor」，走 MediaStore，不需要任何权限，
+  用任何文件管理器都能看到；
+- **Android 9 及以下**：系统没有免权限写公共目录的办法，退回应用私有外部目录，
+  界面会把完整路径显示出来。
+
+本地向量模型（22MB）**不进备份** —— 它是能从界面重新下回来的东西。
+
+---
+
+## 本地向量模型：把 22MB 搬到手机上
+
+「+」→「向量模型」→ 切到「本地模型」。
+
+### 为什么值得为它加十几 MB
+
+记忆检索是这个应用里**唯一一个每几分钟就要跑一次**的模型调用（见 `AppContainer` 里
+那个五分钟一轮的补向量循环）。挂在在线端点上意味着三件事：
+
+- **没网就不能用** —— 而「管住自己不刷手机」这件事，恰恰经常发生在想断网的时候；
+- **每条记忆都要发一次请求** —— 长期看是一笔持续的支出；
+- **记忆是最私密的一类数据** —— 他在坚持什么、反复失败在什么地方。
+  为它单独找一家可信任的端点，比自己在本机算要难得多。
+
+### 是什么
+
+all-MiniLM-L6-v2 的量化版 ONNX，384 维、22MB，托管在本仓库的公开 Release：
+
+```
+https://github.com/wenqv4617-art/FocusSupervisor/releases/download/vector-model-v1/model_quantized.onnx
+```
+
+模型来源是 `sentence-transformers/all-MiniLM-L6-v2`（Apache-2.0）。词表（BERT WordPiece，
+30522 条，231KB）内置在 APK 里（`app/src/main/assets/vocab.txt`） —— 这么小的东西没必要让用户再下一次，
+而且下载失败时整个功能就废了。
+
+### 一次向量是怎么算出来的
+
+```
+文本
+ └─ WordPieceTokenizer ──→ input_ids / attention_mask / token_type_ids
+      └─ ONNX 模型 ──────→ last_hidden_state  [1, seq, 384]
+           └─ mean pooling + L2 归一化 ──→ 一条 384 维单位向量
+```
+
+后两步都是**必须**的，缺一个结果就是错的：
+
+- **mean pooling** 要按 `attention_mask` 求平均，补齐用的 `[PAD]` 必须排除 ——
+  否则短句的向量会被几十个 padding 拉偏，而长句几乎不受影响，排序会整体失真；
+- **L2 归一化** 与 sentence-transformers 的训练输出保持一致，才谈得上「同一套语义空间」。
+
+分词器也是自己写的。这不是炫技：按字切或者按空格切，得到的输入分布与模型训练时的
+完全不是一个东西 —— **模型不会报错**，它只会安静地给出毫无意义的向量，然后记忆检索
+变成随机召回。「看起来在工作但结果是错的」比直接报错有害得多。
+
+### 下载：断点续传 + 校验
+
+22MB 在国内网络下断一次很常见，每次都从零开始会让用户连试三次都下不完。所以：
+下载到 `.part` 临时文件，每次开始前看它有多大，用 `Range` 续传。响应的三种情况都处理
+（206 追加 / 200 清空重下 / 416 已完整）。进度按 250ms 上报一次，带速度与剩余时间，
+支持随时取消（取消后已下载的部分保留）。
+
+**全部下完之后必须校验 SHA-256 再改名。** 一个被截断的 ONNX 文件不会在写入时报错，
+它会在运行时抛出一句和「下载」毫无关系的解析错误 —— 那种问题极难归因。
+校验不过就删掉重下，绝不把损坏的文件留在正式路径上。
+
+### 在线与本地是互斥的两条路
+
+不做自动回退。用户明确选了本地，就该只走本地 —— 一旦偷偷回退到在线端点，
+「这次为什么变慢了 / 这次为什么花了钱」就成了一个没法解释的现象。
+模型没下好时本地路径直接返回失败并带上原因，记忆仓库会安静地退回关键词召回。
+
+**切换时旧向量会被自动清掉。** 不同模型给出的向量来自不同的语义空间，余弦相似度在
+它们之间恒为 0 —— 留着不会报错，只会让「召回越来越差」变成一个查不出原因的现象。
+所以 `embedPending` 里加了维度一致性检查：发现维度变了就整批清空，让它们重新排队计算。
+
+---
+
 ## 阶段边界（现在还没有的东西）
 
 - **没有流式输出**：对话是一次性等模型生成完再上屏，没有逐字效果（下一阶段）；
 - **待办**：面板里可以自己增 / 勾 / 删，AI 也能通过指令改 —— 闭环已经通了。
   截止时间只给三个纯算术区间（30 分钟 / 1 小时 / 3 小时），要精确时间随时可以让 AI
   用指令改（它接受 `yyyy-MM-dd HH:mm`）；
-- **注视监控未实现**：`FocusMonitorService` 能正确进入前台态，但不会被自动拉起；
+- **注视监控要手动开**：`FocusMonitorService` 由「注视监控」面板里的开关拉起，
+  不开就不会跑。这也是为什么**关掉注视监控就不会有 AI 主动盘问** —— 盘问的闸门
+  正是「判定为正在注视屏幕」，两者是同一条链路上的上下游；
 - **向量索引有硬上限**：最近 300 条对话原文参与语义召回，更早的仍在聊天记录里可翻看。
   要突破这个上限，应该把索引挪出 DataStore（独立文件或 Room），而不是把数字调大；
 - **时间线也有上限（300 条）**：它是「近期证据」不是档案 —— 需要长期记住的东西
@@ -594,4 +797,16 @@ Android 9 起后台应用不能访问摄像头，唯一例外是**带着 `camera
 - **ML Kit 打包版在无 GMS 机型上的可用性**：官方没有明文保证（POM 里仍有
   `play-services-*` 传递依赖）。代码对初始化与检测失败都做了兜底 —— 失败只发一条
   错误状态，不影响其它功能。真机是国产无 GMS ROM 的话需要实测一次。
-- **没有单元测试**：`GazeEstimator` 与 `TimeNarrator` 都是纯函数式的，是最该补的两块。
+- **样式注入不是 CSS**：认得的只有一份固定的选择器与属性清单（见「聊天页美化」一节），
+  没有后代选择器、没有伪类、没有 `rgb()` 与具名颜色。这是 Compose 的架构决定的，
+  不是实现偷懒；
+- **背景虚化做不到**：Compose 的 `Modifier.blur` 模糊的是元素**自己的绘制内容**，
+  不是它背后的东西，所以没有浏览器的 `backdrop-filter`。面板顶部的「毛玻璃」
+  用的是半透明底 + 内容从下面滚过的替代做法；
+- **本地模型是可选的，且要占地方**：ONNX Runtime 进包约 +13MB，模型文件再占 22MB。
+  嫌它占地方就继续用在线端点，两条路随时能切；
+- **备份不包含本地模型**：它是可以重新下回来的东西，打包进去只会让每份备份都大 22MB；
+- **恢复是整份覆盖**：没有「只恢复记忆」「只恢复对话」这种粒度。整份覆盖也正是
+  用户点那个按钮时期望的语义，但值得知道；
+- **没有单元测试**：`GazeEstimator`、`TimeNarrator`、`StyleInjector` 都是纯函数式的，
+  是最该补的三块。

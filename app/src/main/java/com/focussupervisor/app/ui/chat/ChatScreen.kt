@@ -2,6 +2,7 @@ package com.focussupervisor.app.ui.chat
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -36,14 +37,18 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
@@ -54,6 +59,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.focussupervisor.app.data.mock.MockChatData
 import com.focussupervisor.app.domain.model.ActionItem
+import com.focussupervisor.app.domain.model.BackgroundMode
+import com.focussupervisor.app.domain.model.ChatAppearance
 import com.focussupervisor.app.domain.model.ChatDialog
 import com.focussupervisor.app.domain.model.ChatMessage
 import com.focussupervisor.app.domain.model.ChatUiState
@@ -64,14 +71,20 @@ import com.focussupervisor.app.ui.components.PermissionCheckDialog
 import com.focussupervisor.app.ui.components.PlusActionPanel
 import com.focussupervisor.app.ui.components.PolicyStatusDialog
 import com.focussupervisor.app.ui.components.defaultActionItems
+import com.focussupervisor.app.ui.components.rememberFileImage
 import com.focussupervisor.app.ui.settings.AiConfigSheet
+import com.focussupervisor.app.ui.settings.AppearanceSheet
+import com.focussupervisor.app.ui.settings.DataManageSheet
 import com.focussupervisor.app.ui.settings.EmbeddingSheet
 import com.focussupervisor.app.ui.settings.GazeSheet
 import com.focussupervisor.app.ui.settings.MemorySheet
 import com.focussupervisor.app.ui.settings.PersonaSheet
 import com.focussupervisor.app.ui.settings.TimelineSheet
+import com.focussupervisor.app.ui.theme.ChatTheme
 import com.focussupervisor.app.ui.theme.FocusSupervisorTheme
 import com.focussupervisor.app.ui.theme.FocusTheme
+import com.focussupervisor.app.ui.theme.LocalChatSkin
+import com.focussupervisor.app.ui.theme.resolveChatSkin
 
 /**
  * 聊天主界面（仿微信）。
@@ -107,40 +120,53 @@ fun ChatRoute(
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 
+    // 外观与 uiState 分开订阅：皮肤是长期设置，不随每条消息变化，
+    // 混在会话状态里会让每来一条消息都重新计算一遍整套颜色。
+    val appearance by viewModel.appearance.collectAsStateWithLifecycle()
+    val baseColors = FocusTheme.colors
+    val skin = remember(appearance, baseColors) { resolveChatSkin(appearance, baseColors) }
+
     // 每次回到前台重查一次权限：用户很可能是去设置页开完权限再回来的，
     // 不重查的话界面会一直显示「未开启」，而他刚刚明明开好了。
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
         viewModel.refreshPermissions()
     }
 
-    ChatScreen(
-        uiState = uiState,
-        onInputChange = viewModel::onInputChange,
-        onSend = viewModel::onSend,
-        onToggleActionPanel = viewModel::onToggleActionPanel,
-        onActionSelected = viewModel::onActionSelected,
-        onDialogDismiss = viewModel::onDialogDismiss,
-        onOpenPermissionSettings = viewModel::onOpenPermissionSettings,
-        onAiConfigDismiss = viewModel::onAiConfigSheetDismiss,
-        onPersonaDismiss = viewModel::onPersonaSheetDismiss,
-        onMemoryDismiss = viewModel::onMemorySheetDismiss,
-        onEmbeddingDismiss = viewModel::onEmbeddingSheetDismiss,
-        onTimelineDismiss = viewModel::onTimelineSheetDismiss,
-        onClearTimeline = viewModel::onClearTimeline,
-        onGazeDismiss = viewModel::onGazeSheetDismiss,
-        onAddTodo = viewModel::onAddTodo,
-        onToggleTodo = viewModel::onToggleTodo,
-        onDeleteTodo = viewModel::onDeleteTodo,
-        onMessageLongPress = viewModel::onMessageLongPress,
-        onMessageActionDismiss = viewModel::onMessageActionDismiss,
-        onMessageEditRequested = viewModel::onMessageEditRequested,
-        onMessageDeleteRequested = viewModel::onMessageDeleteRequested,
-        onMessageEditDismiss = viewModel::onMessageEditDismiss,
-        onMessageEditSubmit = viewModel::onMessageEditSubmit,
-        onMessageDeleteDismiss = viewModel::onMessageDeleteDismiss,
-        onMessageDeleteConfirm = viewModel::onMessageDeleteConfirm,
-        modifier = modifier,
-    )
+    // 皮肤只挂在聊天页这棵子树上。面板读的是 FocusTheme.colors，
+    // 所以换聊天气泡的颜色不会把配置面板一起染了 —— 那是两件事。
+    CompositionLocalProvider(LocalChatSkin provides skin) {
+            ChatScreen(
+            appearance = appearance,
+            uiState = uiState,
+            onInputChange = viewModel::onInputChange,
+            onSend = viewModel::onSend,
+            onToggleActionPanel = viewModel::onToggleActionPanel,
+            onActionSelected = viewModel::onActionSelected,
+            onDialogDismiss = viewModel::onDialogDismiss,
+            onOpenPermissionSettings = viewModel::onOpenPermissionSettings,
+            onAiConfigDismiss = viewModel::onAiConfigSheetDismiss,
+            onPersonaDismiss = viewModel::onPersonaSheetDismiss,
+            onMemoryDismiss = viewModel::onMemorySheetDismiss,
+            onEmbeddingDismiss = viewModel::onEmbeddingSheetDismiss,
+            onTimelineDismiss = viewModel::onTimelineSheetDismiss,
+            onClearTimeline = viewModel::onClearTimeline,
+            onGazeDismiss = viewModel::onGazeSheetDismiss,
+            onAddTodo = viewModel::onAddTodo,
+            onToggleTodo = viewModel::onToggleTodo,
+            onDeleteTodo = viewModel::onDeleteTodo,
+            onMessageLongPress = viewModel::onMessageLongPress,
+            onMessageActionDismiss = viewModel::onMessageActionDismiss,
+            onMessageEditRequested = viewModel::onMessageEditRequested,
+            onMessageDeleteRequested = viewModel::onMessageDeleteRequested,
+            onMessageEditDismiss = viewModel::onMessageEditDismiss,
+            onMessageEditSubmit = viewModel::onMessageEditSubmit,
+            onMessageDeleteDismiss = viewModel::onMessageDeleteDismiss,
+            onMessageDeleteConfirm = viewModel::onMessageDeleteConfirm,
+            onAppearanceDismiss = viewModel::onAppearanceSheetDismiss,
+            onDataManageDismiss = viewModel::onDataManageSheetDismiss,
+            modifier = modifier,
+            )
+    }
 }
 
 /**
@@ -171,6 +197,7 @@ fun ChatRoute(
 @Composable
 fun ChatScreen(
     uiState: ChatUiState,
+    appearance: ChatAppearance,
     onInputChange: (String) -> Unit,
     onSend: () -> Unit,
     onToggleActionPanel: () -> Unit,
@@ -197,11 +224,16 @@ fun ChatScreen(
     onMessageEditSubmit: (String) -> Unit,
     onMessageDeleteDismiss: () -> Unit,
     onMessageDeleteConfirm: () -> Unit,
+    onAppearanceDismiss: () -> Unit,
+    onDataManageDismiss: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val skin = ChatTheme.skin
+
     Scaffold(
         modifier = modifier.fillMaxSize(),
-        containerColor = FocusTheme.colors.chatBackground,
+        // 底色由皮肤决定：iMessage 主题是纯白，捡手机文学是蓝灰。
+        containerColor = skin.chatBackground,
         topBar = {
             ChatTopBar(
                 title = uiState.agentName,
@@ -223,6 +255,7 @@ fun ChatScreen(
             personas = uiState.personas,
             onMessageLongPress = onMessageLongPress,
             contentPadding = scaffoldPadding,
+            appearance = appearance,
         )
     }
 
@@ -286,6 +319,14 @@ fun ChatScreen(
         GazeSheet(onDismiss = onGazeDismiss)
     }
 
+    if (uiState.isAppearanceSheetVisible) {
+        AppearanceSheet(onDismiss = onAppearanceDismiss)
+    }
+
+    if (uiState.isDataManageSheetVisible) {
+        DataManageSheet(onDismiss = onDataManageDismiss)
+    }
+
     // 长按消息的三步：操作面板 → 编辑 / 删除确认。
     // 三者互斥由 ViewModel 保证（进入下一步前先把上一步的目标清空）。
     uiState.messageActionTarget?.let { target ->
@@ -339,27 +380,27 @@ private fun ChatTopBar(
                     Text(
                         text = title,
                         style = MaterialTheme.typography.titleMedium,
-                        color = FocusTheme.colors.textPrimary,
+                        color = ChatTheme.skin.textPrimary,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
                     Text(
                         text = subtitle,
                         style = MaterialTheme.typography.labelSmall,
-                        color = FocusTheme.colors.textSecondary,
+                        color = ChatTheme.skin.textSecondary,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
             },
             colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
-                containerColor = FocusTheme.colors.chromeBackground,
-                titleContentColor = FocusTheme.colors.textPrimary,
+                containerColor = ChatTheme.skin.chrome,
+                titleContentColor = ChatTheme.skin.textPrimary,
             ),
         )
         HorizontalDivider(
             thickness = 0.5.dp,
-            color = FocusTheme.colors.hairline,
+            color = ChatTheme.skin.hairline,
         )
     }
 }
@@ -381,6 +422,7 @@ private fun MessageList(
     personas: PersonaPair,
     onMessageLongPress: (ChatMessage) -> Unit,
     contentPadding: PaddingValues,
+    appearance: ChatAppearance,
 ) {
     val listState = rememberLazyListState()
 
@@ -390,42 +432,90 @@ private fun MessageList(
         }
     }
 
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(contentPadding),
-    ) {
-        if (messages.isEmpty()) {
-            Text(
-                text = "还没有任何记录。\n从这里开始今天的专注。",
-                style = MaterialTheme.typography.bodySmall,
-                color = FocusTheme.colors.textSecondary,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.align(Alignment.Center),
-            )
-        } else {
-            LazyColumn(
-                state = listState,
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(vertical = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                items(
-                    items = messages,
-                    // key 用稳定 id：消息增删时 Compose 能精确保留每一条的
-                    // 内部状态与滚动位置，不会整列表重画。
-                    key = { message -> message.id },
-                ) { message ->
-                    MessageBubble(
-                        message = message,
-                        personas = personas,
-                        onLongPress = onMessageLongPress,
-                    )
+    Box(modifier = Modifier.fillMaxSize()) {
+        // 背景层铺在最底下，且**不受 contentPadding 影响** ——
+        // 它要一直铺到顶栏和输入栏的下面，否则滚动到底部时会露出一条没图的边。
+        ChatBackgroundLayer(appearance = appearance)
+
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(contentPadding),
+        ) {
+            if (messages.isEmpty()) {
+                Text(
+                    text = "还没有任何记录。\n从这里开始今天的专注。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = ChatTheme.skin.textSecondary,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.align(Alignment.Center),
+                )
+            } else {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(vertical = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    items(
+                        items = messages,
+                        // key 用稳定 id：消息增删时 Compose 能精确保留每一条的
+                        // 内部状态与滚动位置，不会整列表重画。
+                        key = { message -> message.id },
+                    ) { message ->
+                        MessageBubble(
+                            message = message,
+                            personas = personas,
+                            onLongPress = onMessageLongPress,
+                        )
+                    }
                 }
             }
         }
     }
 }
+
+/**
+ * 聊天区背景层。
+ *
+ * 三种来源对应 [BackgroundMode] 的三档，其中 PRESET 什么都不画 ——
+ * 那时底色已经由 Scaffold 的 containerColor（也就是皮肤自己的 chatBackground）铺好了，
+ * 在这里再画一层纯色只是白费一次绘制。
+ *
+ * 图片的透明度走 [ChatAppearance.backgroundImageOpacity]：用户把一张很花的图
+ * 铺在聊天页上时，最需要的就是「让它淡一点，别把字压住」。
+ */
+@Composable
+private fun ChatBackgroundLayer(appearance: ChatAppearance) {
+    when (appearance.backgroundMode) {
+        BackgroundMode.PRESET -> Unit
+
+        BackgroundMode.SOLID -> Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color(appearance.backgroundSolidColor ?: FALLBACK_SOLID_BACKGROUND)),
+        )
+
+        BackgroundMode.IMAGE -> {
+            val image = rememberFileImage(appearance.backgroundImagePath)
+            if (image != null) {
+                Image(
+                    bitmap = image,
+                    contentDescription = null,
+                    // Crop 而不是 Fit：背景图要铺满，留边会露出一块底色，
+                    // 看起来像加载了一半。
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .alpha(appearance.backgroundImageOpacity),
+                )
+            }
+        }
+    }
+}
+
+/** 纯色背景的兜底色。理论上进不来（选纯色时一定会带一个色值），兜一手防手改备份。 */
+private val FALLBACK_SOLID_BACKGROUND = Color(0xFFEDEDED)
 
 // ---------------------------------------------------------------------------
 // 底部输入区
@@ -452,7 +542,7 @@ private fun ChatBottomArea(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(FocusTheme.colors.chromeBackground)
+            .background(ChatTheme.skin.chrome)
             .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom)),
     ) {
         ChatInputBar(
@@ -514,12 +604,12 @@ private fun ChatInputBar(
                 .weight(1f)
                 .heightIn(min = InputMinHeight, max = InputMaxHeight)
                 .clip(RoundedCornerShape(6.dp))
-                .background(FocusTheme.colors.inputField)
+                .background(ChatTheme.skin.inputField)
                 .padding(horizontal = 10.dp, vertical = 9.dp),
             textStyle = MaterialTheme.typography.bodyMedium.copy(
-                color = FocusTheme.colors.textPrimary,
+                color = ChatTheme.skin.textPrimary,
             ),
-            cursorBrush = SolidColor(FocusTheme.colors.accent),
+            cursorBrush = SolidColor(ChatTheme.skin.accent),
             maxLines = 4,
             decorationBox = { innerTextField ->
                 Box(contentAlignment = Alignment.CenterStart) {
@@ -527,7 +617,7 @@ private fun ChatInputBar(
                         Text(
                             text = "说点什么…",
                             style = MaterialTheme.typography.bodyMedium,
-                            color = FocusTheme.colors.textSecondary,
+                            color = ChatTheme.skin.textSecondary,
                         )
                     }
                     innerTextField()
@@ -545,7 +635,7 @@ private fun ChatInputBar(
                 imageVector = Icons.AutoMirrored.Filled.Send,
                 contentDescription = "发送",
                 tint = if (canSend) {
-                    FocusTheme.colors.accent
+                    ChatTheme.skin.accent
                 } else {
                     FocusTheme.colors.accentDisabled
                 },
@@ -566,7 +656,7 @@ private fun ChatInputBar(
             Icon(
                 imageVector = Icons.Filled.Add,
                 contentDescription = if (isActionPanelVisible) "收起功能面板" else "展开功能面板",
-                tint = FocusTheme.colors.iconTint,
+                tint = ChatTheme.skin.textSecondary,
                 modifier = Modifier
                     .size(24.dp)
                     .rotate(addRotation),
@@ -584,6 +674,7 @@ private fun ChatInputBar(
 private fun ChatScreenPreview() {
     FocusSupervisorTheme {
         ChatScreen(
+            appearance = ChatAppearance(),
             uiState = ChatUiState(
                 messages = MockChatData.initialMessages(),
                 actions = defaultActionItems(),
@@ -611,6 +702,8 @@ private fun ChatScreenPreview() {
             onMessageEditSubmit = {},
             onMessageDeleteDismiss = {},
             onMessageDeleteConfirm = {},
+            onAppearanceDismiss = {},
+            onDataManageDismiss = {},
         )
     }
 }
@@ -620,6 +713,7 @@ private fun ChatScreenPreview() {
 private fun ChatScreenPanelExpandedPreview() {
     FocusSupervisorTheme {
         ChatScreen(
+            appearance = ChatAppearance(),
             uiState = ChatUiState(
                 messages = MockChatData.initialMessages(),
                 actions = defaultActionItems(needsPermissionAttention = true),
@@ -647,6 +741,8 @@ private fun ChatScreenPanelExpandedPreview() {
             onMessageEditSubmit = {},
             onMessageDeleteDismiss = {},
             onMessageDeleteConfirm = {},
+            onAppearanceDismiss = {},
+            onDataManageDismiss = {},
         )
     }
 }

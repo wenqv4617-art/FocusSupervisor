@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.focussupervisor.app.appContainer
 import com.focussupervisor.app.core.ai.SendOutcome
 import com.focussupervisor.app.domain.model.ActionItem
+import com.focussupervisor.app.domain.model.ChatAppearance
 import com.focussupervisor.app.domain.model.ChatDialog
 import com.focussupervisor.app.domain.model.ChatMessage
 import com.focussupervisor.app.domain.model.ChatUiState
@@ -64,6 +65,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val personaRepository = container.personas
     private val timeline = container.timeline
     private val gaze = container.gaze
+    private val appearanceRepository = container.appearance
     private val engine = container.conversationEngine
 
     private val _uiState = MutableStateFlow(
@@ -75,6 +77,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     /** 对外只暴露只读视图，杜绝 UI 侧直接改状态。 */
     val uiState: StateFlow<ChatUiState> = _uiState.asStateFlow()
+
+    /**
+     * 聊天页外观。
+     *
+     * 与 [uiState] 分开暴露，而不是塞进 `ChatUiState`：外观不是「这次会话的状态」，
+     * 它是**另一个维度**的东西 —— 会话可以重来、消息可以清空，但皮肤是长期设置。
+     * 混在一起会让 `ChatUiState` 每加一条消息都携带一份皮肤，白白扩大重组范围。
+     */
+    val appearance: StateFlow<ChatAppearance> = appearanceRepository.appearance
 
     /** 已经转成聊天消息的播报 id，用于去重。 */
     private val consumedNoticeIds = mutableSetOf<String>()
@@ -168,6 +179,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
             ActionIds.AI_CONFIG -> openSheet(SheetTarget.AI_CONFIG)
 
+            ActionIds.APPEARANCE -> openSheet(SheetTarget.APPEARANCE)
+
+            ActionIds.DATA_MANAGE -> openSheet(SheetTarget.DATA_MANAGE)
+
             else -> {
                 _uiState.update { it.copy(isActionPanelVisible = false) }
                 policy.publishNotice("触发入口：${action.label}（尚未实现）")
@@ -218,6 +233,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     fun onTimelineSheetDismiss() = closeSheet(SheetTarget.TIMELINE)
 
     fun onGazeSheetDismiss() = closeSheet(SheetTarget.GAZE)
+
+    fun onAppearanceSheetDismiss() = closeSheet(SheetTarget.APPEARANCE)
+
+    fun onDataManageSheetDismiss() = closeSheet(SheetTarget.DATA_MANAGE)
 
     /**
      * 清空时间线。
@@ -497,7 +516,16 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     // -----------------------------------------------------------------------
 
     /** 三个 BottomSheet 的标识。 */
-    private enum class SheetTarget { AI_CONFIG, PERSONA, MEMORY, EMBEDDING_CONFIG, TIMELINE, GAZE }
+    private enum class SheetTarget {
+        AI_CONFIG,
+        PERSONA,
+        MEMORY,
+        EMBEDDING_CONFIG,
+        TIMELINE,
+        GAZE,
+        APPEARANCE,
+        DATA_MANAGE,
+    }
 
     private fun openDialog(dialog: ChatDialog) {
         _uiState.update {
@@ -521,6 +549,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 isEmbeddingSheetVisible = target == SheetTarget.EMBEDDING_CONFIG,
                 isTimelineSheetVisible = target == SheetTarget.TIMELINE,
                 isGazeSheetVisible = target == SheetTarget.GAZE,
+                isAppearanceSheetVisible = target == SheetTarget.APPEARANCE,
+                isDataManageSheetVisible = target == SheetTarget.DATA_MANAGE,
             )
         }
     }
@@ -534,6 +564,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 SheetTarget.EMBEDDING_CONFIG -> it.copy(isEmbeddingSheetVisible = false)
                 SheetTarget.TIMELINE -> it.copy(isTimelineSheetVisible = false)
                 SheetTarget.GAZE -> it.copy(isGazeSheetVisible = false)
+                SheetTarget.APPEARANCE -> it.copy(isAppearanceSheetVisible = false)
+                SheetTarget.DATA_MANAGE -> it.copy(isDataManageSheetVisible = false)
             }
         }
     }

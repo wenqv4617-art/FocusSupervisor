@@ -50,6 +50,18 @@ camera = "1.4.2"
 # 真机是国产无 GMS ROM 的话需要实测一次。
 mlkitFace = "16.1.7"
 
+# ---- 本地向量模型 ---------------------------------------------------------
+# ONNX Runtime：跑下载到本机的 all-MiniLM-L6-v2 量化模型。
+#
+# 体积账：AAR 26MB（含 arm64-v8a / armeabi-v7a / x86 / x86_64 四个 ABI），
+# 我们的 abiFilters 只留 arm64-v8a 与 armeabi-v7a，实际进包约 +13MB。
+# 换来的是记忆检索完全离线、不花钱、不把最私密的一类数据发出去。
+#
+# 用 onnxruntime-android 而不是 onnxruntime-mobile：后者体积更小，但只支持
+# 转换成 ORT 格式的模型，而用户的模型是 quantize 出来的标准 ONNX，
+# 直接跑不了。
+onnxRuntime = "1.20.0"
+
 # ---- 测试 -----------------------------------------------------------------
 junit = "4.13.2"
 androidxJunit = "1.2.1"
@@ -88,6 +100,9 @@ androidx-camera-core = { group = "androidx.camera", name = "camera-core", versio
 androidx-camera-camera2 = { group = "androidx.camera", name = "camera-camera2", version.ref = "camera" }
 androidx-camera-lifecycle = { group = "androidx.camera", name = "camera-lifecycle", version.ref = "camera" }
 mlkit-face-detection = { group = "com.google.mlkit", name = "face-detection", version.ref = "mlkitFace" }
+
+# ---- 本地向量模型 ---------------------------------------------------------
+onnxruntime-android = { group = "com.microsoft.onnxruntime", name = "onnxruntime-android", version.ref = "onnxRuntime" }
 
 # ---- 测试 -----------------------------------------------------------------
 junit = { group = "junit", name = "junit", version.ref = "junit" }

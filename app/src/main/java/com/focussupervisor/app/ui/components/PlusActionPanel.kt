@@ -16,10 +16,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.List
 import androidx.compose.material.icons.outlined.Build
 import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.Create
 import androidx.compose.material.icons.outlined.DateRange
 import androidx.compose.material.icons.outlined.Face
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Person
+import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Star
 import androidx.compose.material3.HorizontalDivider
@@ -49,9 +51,12 @@ import com.focussupervisor.app.ui.theme.FocusTheme
  *  - 每行 4 格，格与格等宽；
  *  - 每格 = 一枚圆角白色方块（内嵌矢量图标）+ 下方一行功能名。
  *
- * 之所以不用 LazyVerticalGrid：面板里最多 8 个格子，且需要随展开动画一起做高度
+ * 之所以不用 LazyVerticalGrid：面板里只有十几个格子，且需要随展开动画一起做高度
  * 动画。惰性布局在动画中会因为「可见项才测量」而产生高度跳变，用普通的
  * chunked + Column/Row 反而更稳、更省。
+ *
+ * 现在是 11 项，会排成 3 行（4 + 4 + 3）。面板因此变高了，但它是可折叠的 ——
+ * 用户不点「+」的时候一行都不占。
  */
 
 /** 每行格子数。微信是 4 列，沿用。 */
@@ -86,13 +91,14 @@ object ActionIds {
     const val TIMELINE = "timeline"
     const val GAZE_MONITOR = "gaze_monitor"
     const val AI_CONFIG = "ai_config"
+    const val APPEARANCE = "appearance"
+    const val DATA_MANAGE = "data_manage"
 }
 
 /**
  * 「+」面板。
  *
- * @param actions 要展示的动作项。按 [COLUMNS_PER_ROW] 自动换行，超过 8 个时
- *                调用方应自行分页（当前固定 5 个，不会触发）。
+ * @param actions 要展示的动作项。按 [COLUMNS_PER_ROW] 自动换行。
  * @param onActionClick 点击回调。分发键用 [ActionItem.id]，不要用 label。
  */
 @Composable
@@ -110,7 +116,7 @@ fun PlusActionPanel(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(FocusTheme.colors.chromeBackground)
+                .background(FocusTheme.colors.surfaceSheet)
                 .padding(
                     horizontal = PanelHorizontalPadding,
                     vertical = PanelVerticalPadding,
@@ -187,7 +193,7 @@ private fun PlusActionButton(
                         .offset(x = 2.dp, y = (-2).dp)
                         .size(AttentionDotSize + 3.dp)
                         .clip(CircleShape)
-                        .background(FocusTheme.colors.chromeBackground),
+                        .background(FocusTheme.colors.surfaceSheet),
                     contentAlignment = Alignment.Center,
                 ) {
                     Box(
@@ -276,6 +282,20 @@ fun defaultActionItems(
         id = ActionIds.AI_CONFIG,
         label = "AI 配置",
         icon = Icons.Outlined.Settings,
+    ),
+    ActionItem(
+        id = ActionIds.APPEARANCE,
+        label = "聊天美化",
+        // 用 Create（铅笔）而不是 Star/Favorite：这一项改的是「长什么样」，
+        // 铅笔是这套核心图标里唯一直接表达「编辑外观」的形状。
+        icon = Icons.Outlined.Create,
+    ),
+    ActionItem(
+        id = ActionIds.DATA_MANAGE,
+        label = "数据管理",
+        // Refresh（循环箭头）比 Share 更贴：备份是「存档」、恢复是「回滚」，
+        // 两个动作合起来正是「把数据搬进搬出」的循环语义。
+        icon = Icons.Outlined.Refresh,
     ),
 )
 

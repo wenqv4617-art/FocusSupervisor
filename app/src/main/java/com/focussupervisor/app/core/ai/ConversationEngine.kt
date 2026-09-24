@@ -6,6 +6,7 @@ import com.focussupervisor.app.data.repository.AiConfigRepository
 import com.focussupervisor.app.data.repository.AppPolicyRepository
 import com.focussupervisor.app.data.repository.ConversationRepository
 import com.focussupervisor.app.data.repository.GazeRepository
+import com.focussupervisor.app.data.repository.LocalModelRepository
 import com.focussupervisor.app.data.repository.MemoryRepository
 import com.focussupervisor.app.data.repository.PersonaRepository
 import com.focussupervisor.app.data.repository.PromptCacheRepository
@@ -14,6 +15,7 @@ import com.focussupervisor.app.data.repository.TimelineRepository
 import com.focussupervisor.app.domain.model.AiCommand
 import com.focussupervisor.app.domain.model.AiCommandLimits
 import com.focussupervisor.app.domain.model.ChatMessage
+import com.focussupervisor.app.domain.model.EmbeddingConfig
 import com.focussupervisor.app.domain.model.MemorySource
 import com.focussupervisor.app.domain.model.MessageSender
 import com.focussupervisor.app.domain.model.TodoItem
@@ -77,6 +79,7 @@ class ConversationEngine(
     private val timeline: TimelineRepository,
     private val cache: PromptCacheRepository,
     private val gaze: GazeRepository,
+    private val localModel: LocalModelRepository,
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
 
@@ -87,9 +90,30 @@ class ConversationEngine(
      * 记忆仓库会安静地退回关键词召回 —— 不需要在这里做任何判断。
      */
     private val embedder = TextEmbedder { texts ->
-        // 向量走**独立的**配置，不复用对话端点 —— 现实中这两件事经常不在一家
-        // （DeepSeek 没有公开的 embeddings 接口；中转站往往只代理对话模型）。
-        client.embed(aiConfig.embeddingConfigNow(), texts)
+        embedTexts(aiConfig.embeddingConfigNow(), texts)
+    }
+
+    /**
+     * 向量计算的唯一出口。
+     *
+     * 在线与本地是**互斥的两条路**，不做自动回退：用户明确选了本地模型，
+     * 就该只走本地 —— 一旦偷偷回退到在线端点，「这次为什么变慢了 / 这次为什么
+     * 花了钱」就变成一个没法解释的现象。模型没下好时直接返回失败并带上原因，
+     * 记忆仓库会安静地退回关键词召回，功能不会整个坏掉。
+     *
+     * 向量走**独立的**配置，不复用对话端点 —— 现实中这两件事经常不在一家
+     * （DeepSeek 没有公开的 embeddings 接口；中转站往往只代理对话模型）。
+     */
+    private suspend fun embedTexts(
+        config: EmbeddingConfig,
+        texts: List<String>,
+    ): Result<List<List<Float>>> {
+        if (!config.useLocalModel) return client.embed(config, texts)
+
+        val engine = localModel.ensureEngineReady().getOrElse { throwable ->
+            return Result.failure(throwable)
+        }
+        return engine.embed(texts)
     }
 
     /**
@@ -137,7 +161,7 @@ class ConversationEngine(
             phase = "读取向量配置"
             val embeddingConfig = aiConfig.embeddingConfigNow()
             val queryEmbedding = if (embeddingConfig.isUsable) {
-                client.embed(embeddingConfig, listOf(text)).getOrNull()?.firstOrNull()
+                embedTexts(embeddingConfig, listOf(text)).getOrNull()?.firstOrNull()
             } else {
                 null
             }
