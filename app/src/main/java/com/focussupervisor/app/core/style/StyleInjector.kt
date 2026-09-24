@@ -323,7 +323,15 @@ object StyleInjector {
             else -> current
         }
 
-    /** 剥掉 `/* … *\/` 注释。手写扫描，理由见类注释。 */
+    /**
+     * 剥掉块注释。
+     *
+     * 注释的定界符写成「斜杠星号 …… 星号斜杠」而不是直接写出来 ——
+     * **Kotlin 的块注释是可以嵌套的**（这一点和 Java 不同）。在 KDoc 里直接写一个
+     * 左定界符，会开出一个内层注释，于是本段 KDoc 的右定界符被内层吃掉，
+     * 后面整段代码都变成注释 —— 编译器只会报一句「Missing '}'」和一句
+     * 文件末尾的「Unclosed comment」，看不出真正的原因。
+     */
     private fun stripComments(text: String): String {
         if (!text.contains("/*")) return text
         val builder = StringBuilder(text.length)
