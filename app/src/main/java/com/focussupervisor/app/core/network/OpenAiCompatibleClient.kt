@@ -685,9 +685,20 @@ data class ChatTurn(
     val content: String,
 ) {
     companion object {
-        fun system(content: String) = ChatTurn("system", content)
-        fun user(content: String) = ChatTurn("user", content)
-        fun assistant(content: String) = ChatTurn("assistant", content)
+        /**
+         * 三个角色名。
+         *
+         * 抽成常量是因为调用方会**比较**它们（例如「从历史里剔除末尾那条 user」），
+         * 而散落的字符串字面量在比较时写错一个字母不会有任何编译期提示，
+         * 只会安静地永远不等 —— 那正是最难查的一类 bug。
+         */
+        const val ROLE_SYSTEM = "system"
+        const val ROLE_USER = "user"
+        const val ROLE_ASSISTANT = "assistant"
+
+        fun system(content: String) = ChatTurn(ROLE_SYSTEM, content)
+        fun user(content: String) = ChatTurn(ROLE_USER, content)
+        fun assistant(content: String) = ChatTurn(ROLE_ASSISTANT, content)
     }
 }
 

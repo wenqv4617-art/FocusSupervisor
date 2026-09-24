@@ -1,5 +1,9 @@
 package com.focussupervisor.app.core.ai
 
+import android.util.Log
+import com.focussupervisor.app.core.ai.prompt.PersonaStyle
+import com.focussupervisor.app.core.ai.prompt.PromptProfile
+import com.focussupervisor.app.core.ai.prompt.TokenEstimator
 import com.focussupervisor.app.core.time.TimeNarrator
 import com.focussupervisor.app.core.network.ChatTurn
 import com.focussupervisor.app.domain.model.AiCommandLimits
@@ -35,7 +39,7 @@ import java.time.format.DateTimeFormatter
  * ```
  *   [system]  稳定段：前置提示、人设、核心/短期记忆、指令协议、各种规则
  *             —— 只在用户改人设、改前置提示、或记忆发生变化时才变
- *   [历史]    每一轮都是上一次请求里原样出现过的内容，窗口按块滑动（见 HISTORY_TRIM_CHUNK）
+ *   [历史]    每一轮都是上一次请求里原样出现过的内容，窗口按块滑动（见 PromptBudget.historyTrimChunk）
  *   [末尾]    本轮状态：召回的记忆、相关往事、待办、白名单剩余时间、最近发生的事、现在几点
  *             —— 每轮都变，所以必须放在最后，而且**只能**放在最后
  * ```
@@ -58,6 +62,35 @@ import java.time.format.DateTimeFormatter
  * 到它为止 —— 但用户消息本来就不长，真正的长前缀（system + 全部历史）一分不少地命中了。
  *
  * ===========================================================================
+ * 铁律：最后一条消息永远是「本轮他刚说的话」
+ * ===========================================================================
+ * 这里修的是一个真实发生过的缺陷：AI 总是回答**上一轮**的内容。
+ *
+ * 根因不是模型，是时序。用户点发送后的链路是：
+ *
+ * ```
+ *   ChatViewModel ──> ConversationEngine.send(text)
+ *                        │
+ *                        ├─ conversation.append(新消息)   ← 写 DataStore，**是异步的**
+ *                        │
+ *                        └─ val history = conversation.messages.value   ← 读内存镜像
+ * ```
+ *
+ * `append` 落盘之后，仓库的内存镜像要等 DataStore 的 Flow 重新发射才会更新 ——
+ * 中间有一个真实的窗口。在这个窗口里读 `messages.value`，拿到的是**没有本轮输入**的
+ * 旧历史。于是旧历史的最后一条是 AI 的上一条回复，状态块被挂到更早的那条用户消息上，
+ * 整个消息序列以 assistant 结尾 —— 模型只能顺着往下说，也就是「回答上一轮」。
+ *
+ * 修法不是加锁（加锁治不了「读到的就是旧快照」），而是**让组装器不再依赖那个快照**：
+ * [buildTurns] 显式接收本轮输入 [CurrentTurn]，并且：
+ *
+ *  1. 先按 id 从历史里**幂等剔除**本轮输入 —— 无论它在不在快照里；
+ *  2. 无论历史长什么样，**末尾都自己重新追加一次**本轮输入；
+ *  3. 状态块挂在**这一条**上。
+ *
+ * 于是「末尾是本轮输入」从「一个希望」变成了「一个构造上的保证」。
+ *
+ * ===========================================================================
  * 顺序就是优先级
  * ===========================================================================
  * ```
@@ -73,28 +106,33 @@ import java.time.format.DateTimeFormatter
  * **越靠前的内容，模型越会当成不可协商的前提**。所以用户的前置提示必须在第 1 位
  * （哪怕它和人设冲突，也该按用户写的来），而指令协议这种「工具说明」放后面。
  */
+/**
+ * 本轮用户输入。
+ *
+ * 单独抽一个类型，而不是直接传 [ChatMessage]：这个「本轮输入」与仓库里那条消息
+ * 的关系是**不确定的** —— 它可能已经写进仓库、可能还在路上。用一个独立的值对象
+ * 传进来，语义就是「这是本轮唯一的真实输入」，与快照无关。
+ *
+ * @param id 消息 id。用于从历史里幂等剔除同一条，避免末尾出现两条一样的消息。
+ * @param text 正文。
+ * @param timestampMillis 发生时间。
+ */
+data class CurrentTurn(
+    val id: String,
+    val text: String,
+    val timestampMillis: Long,
+)
+
 object PromptAssembler {
 
-    /**
-     * 带进上下文的最近对话条数（下限）。
-     *
-     * 实际保留条数在 [RECENT_TURN_LIMIT] 到 [RECENT_TURN_LIMIT] + [HISTORY_TRIM_CHUNK] - 1
-     * 之间浮动，理由见 [HISTORY_TRIM_CHUNK]。
-     */
-    const val RECENT_TURN_LIMIT = 24
+    /** 是否在日志里记录每一轮丢了多少历史。排查「AI 好像忘了刚才说的话」时打开它。 */
+    private const val LOG_BUDGET_TRIM = true
 
-    /**
-     * 历史窗口的**滑动步长**。
-     *
-     * 这是为缓存命中率服务的一个刻意设计。如果严格「只留最近 24 条」，那么每来一条
-     * 新消息，窗口的第一条就会变，公共前缀立刻断在历史的开头 —— 缓存只覆盖到那条
-     * system，等于白设。
-     *
-     * 改成按 12 条为一块滑动之后，窗口的第一条**每 12 轮才变一次**：这期间新消息只是
-     * 往末尾追加，前面逐字节不变，整段历史都在命中范围内。代价是最多多带 11 条消息
-     * （一两百 token），换来 12 轮里稳定的长前缀 —— 这个交换在任何价格模型下都划算。
-     */
-    const val HISTORY_TRIM_CHUNK = 12
+    /** 核心记忆的条数上限。它属于「不可动摇的设定」，两种档位都给满。 */
+    private const val MAX_CORE_MEMORIES = 12
+
+    /** 日志标签。 */
+    private const val TAG = "PromptAssembler"
 
     private val TIME_FORMATTER: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
 
@@ -106,12 +144,25 @@ object PromptAssembler {
      * 这是缓存命中率的全部秘密，也是这个文件最容易被后人无意破坏的地方。
      */
     fun buildSystemPrompt(
+        profile: PromptProfile,
         prePrompt: String,
         personas: PersonaPair,
         coreMemories: List<MemoryEntry>,
         shortTermMemories: List<MemoryEntry>,
     ): String = buildString {
-        // ---- 1. 前置提示（位置最靠前，逐字原样，不做任何加工）----
+        // ---- 0. 模型强约束锚点（排在用户前置提示之前）----
+        //
+        // 目前只有 Llama 档用它（中文语种锚点）。为什么它必须压过用户的前置提示：
+        // 那是**能不能用**的问题，而前置提示是**风格**的问题。
+        // 一段英文的、大写的、命令式的内容放在最前面，是这类底模遵循度最高的位置。
+        if (profile.systemAnchor.isNotBlank()) {
+            appendLine(profile.systemAnchor.trim())
+            appendLine()
+            appendLine(SEPARATOR)
+            appendLine()
+        }
+
+        // ---- 1. 前置提示（用户自己写的，逐字原样）----
         if (prePrompt.isNotBlank()) {
             appendLine(prePrompt.trim())
             appendLine()
@@ -120,8 +171,14 @@ object PromptAssembler {
         }
 
         // ---- 2 / 3. 人设 ----
+        //
+        // 写法按模型量级切换。给 0.5B 喂一段三百字的散文人设，它抓不住重点，
+        // 反而会把「冷淡」这类形容词当成需要展开的写作要求。
         appendLine("# 你的身份")
-        appendLine(describeAi(personas.ai))
+        when (profile.personaStyle) {
+            PersonaStyle.FULL -> appendLine(describeAi(personas.ai))
+            PersonaStyle.TERSE -> appendLine(describeAiTerse(personas.ai))
+        }
         appendLine()
         appendLine("# 你在和谁说话")
         appendLine(describeUser(personas.user))
@@ -131,8 +188,12 @@ object PromptAssembler {
         //
         // 召回出来的记忆**不在这里**：那部分每轮都不同，放进来就等于每轮都让缓存失效。
         // 它们由 buildVolatileContext 放到末尾。
-        appendMemorySection("核心记忆", coreMemories, "（暂无）")
-        appendMemorySection("短期记忆", shortTermMemories, "（暂无）")
+        appendMemorySection("核心记忆", coreMemories.take(MAX_CORE_MEMORIES), "（暂无）")
+        appendMemorySection(
+            "短期记忆",
+            shortTermMemories.take(profile.budget.shortTermMemories),
+            "（暂无）",
+        )
 
         // ---- 6. 指令协议 ----
         appendLine(COMMAND_PROTOCOL)
@@ -142,6 +203,22 @@ object PromptAssembler {
 
         // ---- 8. 时间的使用方式 ----
         appendLine(TIME_PROTOCOL)
+
+        // ---- 9. 回答长度 ----
+        //
+        // 微型档的这条是**硬要求**而不是建议：0.5B 一旦开始写长文就会开始编，
+        // 而且端侧逐字输出的速度会让一段两百字的回答变成十几秒的等待。
+        if (profile.replyLengthHint.isNotBlank()) {
+            appendLine()
+            appendLine("# 回答长度")
+            appendLine(profile.replyLengthHint.trim())
+        }
+
+        // ---- 10. 思考链约束（仅 R1 档）----
+        if (profile.reasoningProtocol.isNotBlank()) {
+            appendLine()
+            appendLine(profile.reasoningProtocol.trim())
+        }
     }
 
     /**
@@ -151,6 +228,7 @@ object PromptAssembler {
      * 返回的串不带尾部空行，方便直接拼接。
      */
     fun buildVolatileContext(
+        profile: PromptProfile,
         recalledMemories: List<MemoryEntry>,
         recalledConversation: List<String>,
         todos: List<TodoItem>,
@@ -161,13 +239,23 @@ object PromptAssembler {
         lastInteractionMillis: Long?,
         nowMillis: Long,
     ): String = buildString {
+        // 每个区块都在这里**再夹一次上限**。
+        //
+        // 上层（ConversationEngine）已经按 budget.recallLimit 去检索了，这里为什么还要夹？
+        // 因为那个 limit 是「检索几条」，而这里是「渲染几条」，两者的来源不同：
+        // 召回结果里有一部分会因为去重、过期被过滤掉，也可能将来换了检索实现而变多。
+        // 把上限钉在**渲染处**，预算才是真的硬约束 —— 否则某天换掉召回实现，
+        // 端侧就会突然收到一份三千 token 的上下文，而没有人会想到是这里出的问题。
+        val budget = profile.budget
+
         appendLine(STATUS_HEADER)
 
         // ---- 此刻想起的事 ----
-        if (recalledMemories.isNotEmpty()) {
+        val memories = recalledMemories.take(budget.recallLimit)
+        if (memories.isNotEmpty()) {
             appendLine("# 此刻想起的事")
             appendLine("这是他以前说过、和当前话题有关的（按相关度排序）：")
-            recalledMemories.forEach { entry ->
+            memories.forEach { entry ->
                 val pin = if (entry.pinned) "（已置顶）" else ""
                 appendLine("- [${entry.tier.label}] ${entry.content}$pin")
             }
@@ -175,10 +263,11 @@ object PromptAssembler {
         }
 
         // ---- 相关往事 ----
-        if (recalledConversation.isNotEmpty()) {
+        val snippets = recalledConversation.take(budget.recalledConversationSnippets)
+        if (snippets.isNotEmpty()) {
             appendLine("# 相关往事")
             appendLine("从历史对话里检索到的原文片段：")
-            recalledConversation.forEach { appendLine("- $it") }
+            snippets.forEach { appendLine("- $it") }
             appendLine()
         }
 
@@ -197,12 +286,14 @@ object PromptAssembler {
         if (whitelist.isEmpty()) {
             appendLine("（当前没有任何临时豁免。）")
         } else {
-            whitelist.forEach { entry -> appendLine("- ${describeWhitelist(entry, nowMillis)}") }
+            whitelist.take(budget.whitelistEntries).forEach { entry ->
+                appendLine("- ${describeWhitelist(entry, nowMillis)}")
+            }
         }
         appendLine()
 
         // ---- 最近发生的事 ----
-        appendSituationSection(timeline, nowMillis)
+        appendSituationSection(timeline, nowMillis, budget.timelineEvents)
 
         // ---- 摄像头此刻看到的 ----
         appendVisionSection(vision)
@@ -212,71 +303,204 @@ object PromptAssembler {
     }.trim()
 
     /**
-     * 把最近的对话映射成模型能吃的消息序列，并把 [volatileContext] 拼到本轮用户消息末尾。
+     * 把最近的对话映射成模型能吃的消息序列。
+     *
+     * ===========================================================================
+     * 这个方法的全部意义：让「末尾是本轮输入」成为构造上的保证
+     * ===========================================================================
+     * 三条不变量，按顺序执行：
+     *
+     * ```
+     *   1. 窗口化历史          →  只留最近若干条（按 profile 的预算）
+     *   2. 幂等剔除本轮输入    →  它在快照里也好、不在也好，结果一样
+     *   3. 末尾自己追加一次    →  状态块挂在**这一条**上
+     * ```
+     *
+     * 第 2 步的幂等性是修那个「AI 总是回答上一轮」缺陷的关键。它必须同时挡住两种
+     * 输入：历史里**有**这条消息（`append` 已经落盘、Flow 也发射了），
+     * 以及历史里**没有**这条消息（还在那个异步窗口里）。两种情况都要走到同一个结果。
      *
      * 系统胶囊（[MessageSender.SYSTEM]）会被过滤掉：那些是界面上给**人**看的
      * 状态播报（「已执行压制」），把它们塞进上下文只会让模型以为自己在跟系统对话。
      * 它们的内容并不丢 —— 该记的早就记进时间线了，而时间线在 [volatileContext] 里。
      *
-     * @param history 按时间正序的完整会话
+     * @param history 按时间正序的完整会话快照。**允许它不包含本轮输入**。
+     * @param currentTurn 本轮的唯一真实输入。主动盘问路径下为 null。
+     * @param trailingUserText 主动盘问时追加在末尾的临时触发消息。
+     *        与 [currentTurn] 二选一；两者都为 null 时退回旧行为（把状态挂到
+     *        历史里最后一条用户消息上），仅为兼容，正常链路不该走到那里。
      */
     fun buildTurns(
+        profile: PromptProfile,
         systemPrompt: String,
         history: List<ChatMessage>,
         volatileContext: String,
+        currentTurn: CurrentTurn? = null,
         trailingUserText: String? = null,
     ): List<ChatTurn> {
-        val turns = windowedHistory(history)
+        val windowed = windowedHistory(history, profile)
 
-        val result = mutableListOf<ChatTurn>()
-        result += ChatTurn.system(systemPrompt)
+        // ---- 构造固定的两头 ----
+        val systemTurn = ChatTurn.system(systemPrompt)
 
-        // ---- 常规路径：状态挂在本轮用户消息上 ----
-        if (trailingUserText == null) {
-            val lastUserIndex = turns.indexOfLast { it.sender == MessageSender.USER }
-
-            turns.forEachIndexed { index, message ->
-                val stamped = stamp(message)
-                val content = if (index == lastUserIndex && volatileContext.isNotBlank()) {
-                    "$stamped\n\n$volatileContext"
-                } else {
-                    stamped
-                }
-
-                when (message.sender) {
-                    MessageSender.USER -> result += ChatTurn.user(content)
-                    MessageSender.AI -> result += ChatTurn.assistant(content)
-                    MessageSender.SYSTEM -> Unit
-                }
-            }
-
-            return result
+        // 本轮输入的完整内容：正文 + 状态块。
+        // 状态块**拼在他这句话的末尾**（而不是单开一条消息）的理由见类注释。
+        val tailText: String? = when {
+            currentTurn != null -> joinWithContext(stamp(currentTurn.timestampMillis, currentTurn.text), volatileContext)
+            trailingUserText != null -> joinWithContext(trailingUserText, volatileContext)
+            else -> null
         }
 
-        // ---- 主动盘问路径：状态挂在那条**临时**的触发消息上 ----
-        //
-        // 这条路没有「他刚发的新消息」，所以状态块不能挂到历史里的旧消息上 ——
-        // 那等于改动历史中段的一个字节，后面所有内容都会失去缓存前缀（见类注释）。
-        // 正确做法是在末尾追加一条不落盘的临时 user 消息，把状态与触发说明都挂给它。
-        turns.forEach { message ->
+        // ---- 中间的历史 ----
+        val historyTurns = windowed.mapNotNull { message ->
             when (message.sender) {
-                MessageSender.USER -> result += ChatTurn.user(stamp(message))
-                MessageSender.AI -> result += ChatTurn.assistant(stamp(message))
-                MessageSender.SYSTEM -> Unit
+                MessageSender.USER -> ChatTurn.user(stamp(message))
+                MessageSender.AI -> ChatTurn.assistant(stamp(message))
+                MessageSender.SYSTEM -> null
             }
         }
 
-        result += ChatTurn.user(
-            buildString {
-                append(trailingUserText)
-                if (volatileContext.isNotBlank()) {
-                    append("\n\n")
-                    append(volatileContext)
-                }
-            },
-        )
+        // ---- 幂等剔除本轮输入 ----
+        //
+        // 两种剔除都要做，因为它们的失效场景不同：
+        //  - 按 id 剔除是主路径（绝大多数情况）；
+        //  - 按「尾部同文本的用户消息」再削一次，是为了挡住 id 不一致的少数情况 ——
+        //    例如消息刚写入仓库、调用方手里的 id 与仓库回填的 id 不同。
+        //    只在**尾部**比对，是因为同一个人的同一句话在更早的位置重复出现
+        //    是真实存在的（「我睡不着」「我睡不着」），那时两条都该保留。
+        val deduped = if (currentTurn == null) {
+            historyTurns
+        } else {
+            dropTrailingDuplicate(historyTurns, currentTurn)
+        }
 
-        return result
+        // 末尾那一轮。
+        //
+        // 这里有一点必须说清楚：tailText 非 null 时，末尾**永远是本轮输入**，
+        // 这是构造上的保证；只有 tailText 为 null（既没有本轮输入、也没有主动触发
+        // 说明）这条异常路径，才会退回「把状态挂到历史中段的旧消息上」。
+        val tailTurn = tailText?.let { ChatTurn.user(it) }
+        val finalHistory = if (tailTurn == null) attachToLastUser(deduped, volatileContext) else deduped
+
+        return applyBudget(
+            profile = profile,
+            systemTurn = systemTurn,
+            history = finalHistory,
+            tailTurn = tailTurn,
+        )
+    }
+
+    /** 把状态块拼到一段正文后面。空状态块就原样返回正文，不留多余空行。 */
+    private fun joinWithContext(text: String, volatileContext: String): String =
+        if (volatileContext.isBlank()) text else "$text\n\n$volatileContext"
+
+    /** 与 [stamp] 同构，但输入不是 [ChatMessage]（本轮输入可能在仓库里还没有消息对象）。 */
+    private fun stamp(timestampMillis: Long, text: String): String =
+        "[${TimeNarrator.stamp(timestampMillis)}] $text"
+
+    /**
+     * 幂等剔除本轮输入。
+     *
+     * 判据分两级，先严后宽：
+     *  1. **id 相同** —— 最可靠，直接在任意位置剔除（同一 id 只可能有一条）。
+     *  2. **末尾一条是文本完全相同的用户消息** —— 兜住 id 不一致的情况。
+     *     只比末尾，理由见 [buildTurns] 里的注释。
+     */
+    private fun dropTrailingDuplicate(
+        turns: List<ChatTurn>,
+        currentTurn: CurrentTurn,
+    ): List<ChatTurn> {
+        val rendered = stamp(currentTurn.timestampMillis, currentTurn.text)
+
+        // 第一级：渲染后逐字一致。不管出现在哪个位置，都是同一条 ——
+        // 一条消息在历史里只可能出现一次，所以直接全表剔除。
+        val byContent = turns.filterNot { it.role == ChatTurn.ROLE_USER && it.content == rendered }
+        if (byContent.size != turns.size) return byContent
+
+        // 第二级：末尾那条用户消息的**正文**与他这句话一致，但时间戳不同
+        // （消息刚写库时，调用方手里的时间与他实际落盘的时间可能差几毫秒）。
+        //
+        // 为什么只削末尾一条、不做全表匹配：同一个人的同一句话在更早的位置重复出现
+        // 是真实存在的（「我睡不着」「我睡不着」），那时两条都该保留。
+        val last = byContent.lastOrNull() ?: return byContent
+        if (last.role != ChatTurn.ROLE_USER) return byContent
+        if (last.content.startsWith("[") && last.content.endsWith(currentTurn.text)) {
+            return byContent.dropLast(1)
+        }
+        return byContent
+    }
+
+    /**
+     * 兜底：把状态块挂到历史里最后一条用户消息上。
+     *
+     * **只在异常路径上使用** —— 正常链路必然有本轮输入（发送）或主动触发说明（盘问）。
+     * 这条路径会改动历史中段的一条消息，因此会破坏那之后的缓存前缀；记一条日志，
+     * 免得它悄悄发生而没人知道。
+     *
+     * @return 合并后的历史；没有可挂载的用户消息时原样返回。
+     */
+    private fun attachToLastUser(turns: List<ChatTurn>, volatileContext: String): List<ChatTurn> {
+        if (volatileContext.isBlank()) return turns
+        val index = turns.indexOfLast { it.role == ChatTurn.ROLE_USER }
+        if (index < 0) return turns
+
+        Log.w(TAG, "本轮输入为空，状态块退回挂到历史最后一条用户消息上")
+        val merged = turns.toMutableList()
+        merged[index] = ChatTurn.user(joinWithContext(merged[index].content, volatileContext))
+        return merged
+    }
+
+    /**
+     * 按 token 预算收敛。
+     *
+     * 只丢**历史**，绝不丢 system 与本轮输入：
+     *  - system 丢了等于把规则和指令协议一起丢了；
+     *  - 本轮输入丢了就是这次要修的缺陷本身。
+     *
+     * 丢的时候按块丢（[PromptBudget.historyTrimChunk]）而不是一条一条丢：逐条丢会让
+     * 每一轮的窗口起点都不同，上一轮发过的内容这一轮全部错位，缓存前缀当场作废。
+     */
+    private fun applyBudget(
+        profile: PromptProfile,
+        systemTurn: ChatTurn,
+        history: List<ChatTurn>,
+        tailTurn: ChatTurn?,
+    ): List<ChatTurn> {
+        val budget = profile.budget.maxPromptTokens
+        val chunk = profile.budget.historyTrimChunk.coerceAtLeast(1)
+
+        var kept = history
+        var dropped = 0
+        while (true) {
+            val candidate = buildList {
+                add(systemTurn)
+                addAll(kept)
+                tailTurn?.let { add(it) }
+            }
+            if (TokenEstimator.estimate(candidate) <= budget) {
+                if (dropped > 0 && BuildDebug.LOG_BUDGET) {
+                    Log.i(TAG, "${profile.displayName}：预算 $budget，丢弃历史 $dropped 条")
+                }
+                return candidate
+            }
+            if (kept.isEmpty()) {
+                // 连「system + 本轮输入」都超预算。这时已经没有能安全丢掉的东西了：
+                // system 里有规则与指令协议，本轮输入是这次要回答的内容。
+                // 记一条日志说明这个状态，然后照发 —— 让模型慢一点，好过让它不知道规矩。
+                Log.w(
+                    TAG,
+                    "${profile.displayName}：system 与本轮输入合计已超预算 $budget，" +
+                        "模型体积可能不适配这一档，建议换更小的模型或更短的提示词",
+                )
+                return buildList {
+                    add(systemTurn)
+                    tailTurn?.let { add(it) }
+                }
+            }
+            val step = minOf(chunk, kept.size)
+            kept = kept.drop(step)
+            dropped += step
+        }
     }
 
     /**
@@ -289,20 +513,38 @@ object PromptAssembler {
         "[${TimeNarrator.stamp(message.timestampMillis)}] ${message.text}"
 
     /**
-     * 按块滑动的历史窗口，见 [HISTORY_TRIM_CHUNK]。
+     * 按块滑动的历史窗口，见 [PromptBudget.historyTrimChunk]。
      *
-     * 返回条数在 `[RECENT_TURN_LIMIT, RECENT_TURN_LIMIT + HISTORY_TRIM_CHUNK)` 之间。
+     * 同时受两重约束：**条数上限**（profile 决定留几轮）与**块对齐**
+     * （丢的时候按块丢，保证窗口起点在一段时间内稳定）。
      */
-    private fun windowedHistory(history: List<ChatMessage>): List<ChatMessage> {
+    private fun windowedHistory(history: List<ChatMessage>, profile: PromptProfile): List<ChatMessage> {
         val turns = history.filter { it.sender != MessageSender.SYSTEM }
 
-        val excess = turns.size - RECENT_TURN_LIMIT
+        val limit = profile.budget.historyMessages
+        val chunk = profile.budget.historyTrimChunk.coerceAtLeast(1)
+
+        val excess = turns.size - limit
         if (excess <= 0) return turns
 
-        // 把「超出的条数」向下取整到块边界再丢：窗口起点于是在 12 轮之内保持不变。
-        val drop = (excess / HISTORY_TRIM_CHUNK) * HISTORY_TRIM_CHUNK
+        // 把「超出的条数」向下取整到块边界再丢：窗口起点于是在 chunk 轮之内保持不变。
+        val drop = (excess / chunk) * chunk
         return if (drop <= 0) turns else turns.drop(drop)
     }
+
+    /**
+     * 微型模型的人设写法。
+     *
+     * 和 [describeAi] 的区别不是长度，是**句式**：微型模型对「你是 X。你不做 Y。」
+     * 这类短句的遵循度，明显高于同样字数的连续散文。所以这里是三句断言，
+     * 没有描述性的修饰。
+     */
+    private fun describeAiTerse(persona: AiPersona): String = buildString {
+        append("你叫「${persona.name}」，是一个自律监督者。")
+        append("你说话冷淡、简短、不客气，但你是站在他这一边的。")
+        append("你的职责只有一件：盯着他把该做的事做完。")
+    }
+
 
     // -----------------------------------------------------------------------
     // 分段渲染
@@ -334,12 +576,16 @@ object PromptAssembler {
     private fun StringBuilder.appendSituationSection(
         timeline: List<TimelineEvent>,
         nowMillis: Long,
+        limit: Int,
     ) {
         val horizonMillis = TimelineDefaults.PROMPT_HORIZON_HOURS * 3_600_000L
         val recent = timeline
             .filter { it.atMillis >= nowMillis - horizonMillis }
             .sortedByDescending { it.atMillis }
-            .take(TimelineDefaults.PROMPT_EVENT_LIMIT)
+            // 端侧与云端在这里分道扬镳：时间线的价值是「最近发生了什么」，
+            // 而最近发生的三件已经能覆盖绝大多数判断。给 0.5B 塞十二条事件，
+            // 它只会从中随便挑一条来复读。
+            .take(minOf(limit, TimelineDefaults.PROMPT_EVENT_LIMIT))
 
         if (recent.isEmpty()) return
 

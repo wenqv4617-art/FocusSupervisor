@@ -1,6 +1,8 @@
 package com.focussupervisor.app.core.ai
 
 import android.util.Log
+import com.focussupervisor.app.core.ai.prompt.PromptProfile
+import com.focussupervisor.app.core.ai.prompt.PromptProfiles
 import com.focussupervisor.app.core.network.OpenAiCompatibleClient
 import com.focussupervisor.app.data.repository.AiConfigRepository
 import com.focussupervisor.app.data.repository.AppPolicyRepository
@@ -13,6 +15,7 @@ import com.focussupervisor.app.data.repository.PromptCacheRepository
 import com.focussupervisor.app.data.repository.TextEmbedder
 import com.focussupervisor.app.data.repository.TimelineRepository
 import com.focussupervisor.app.domain.model.AiCommand
+import com.focussupervisor.app.domain.model.AiConfig
 import com.focussupervisor.app.domain.model.AiCommandLimits
 import com.focussupervisor.app.domain.model.ChatMessage
 import com.focussupervisor.app.domain.model.EmbeddingConfig
@@ -84,6 +87,47 @@ class ConversationEngine(
 ) {
 
     /**
+     * 端点是不是跑在**这台手机**上。
+     *
+     * ===========================================================================
+     * 为什么这件事决定了整个提示词预算
+     * ===========================================================================
+     * 云端与端侧的成本结构完全不同：
+     *
+     *  - 云端：长提示词只是多花点钱，缓存命中还能打折。10k token 无所谓。
+     *  - 端侧：长提示词**直接就是等待时间**。SoC 的预填充速度是每秒几百 token，
+     *    10k token 意味着用户按下发送之后要盯着屏幕半分钟才看到第一个字。
+     *
+     * 所以预算按运行位置分轨，而运行位置只有两个判据：
+     *  1. 用户在配置里明确选了端侧模型（[AiConfig.useLocalModel]）；
+     *  2. 地址指向本机环回（本机 Ollama 就是这种情况）。
+     *
+     * 不认 `10.0.2.2`：那是 Android 模拟器里访问**开发机**的地址，
+     * 算力在电脑上而不在手机上，按端侧给它压预算没有意义。
+     */
+    /**
+     * 按档位给出实际用于请求的配置。
+     *
+     * 唯一会覆盖用户设置的是**采样温度**，而且只在端侧生效。
+     * 理由是具体的：0.5B 级模型对温度极其敏感 —— 0.7 会让它开始自由发挥、
+     * 车轱辘话来回说，而这些小模型恰恰是「照着格式输出」比「有创意」重要得多。
+     * 云端不动用户的值：那是他手调的，中大型模型也完全承受得住。
+     */
+    private fun effectiveConfig(config: AiConfig, profile: PromptProfile): AiConfig {
+        val recommended = profile.profileTemperature ?: return config
+        return if (isLocalEndpoint(config)) config.copy(temperature = recommended) else config
+    }
+
+    private fun isLocalEndpoint(config: AiConfig): Boolean {
+        if (config.useLocalModel) return true
+        val url = config.baseUrl.lowercase()
+        return url.contains("127.0.0.1") ||
+            url.contains("localhost") ||
+            url.contains("0.0.0.0") ||
+            url.contains("[::1]")
+    }
+
+    /**
      * 把文本转向量的适配器。
      *
      * 记忆仓库不知道网络的存在，这里把两者接起来。没配向量模型时它返回失败，
@@ -141,12 +185,25 @@ class ConversationEngine(
                 .lastOrNull { it.sender == MessageSender.USER }
                 ?.timestampMillis
 
+            // 本轮输入先做成一个独立的值对象，再落库。
+            //
+            // 顺序很重要：**先有 CurrentTurn，再 append**。因为 append 之后去读
+            // `conversation.messages.value` 拿到的可能是**还没刷新**的旧快照
+            // （DataStore 落盘 → Flow 发射 → 仓库内存镜像更新，中间有真实窗口）。
+            // 组装器只认手里这个值对象，不再依赖那个快照 —— 这就是「AI 总是回答
+            // 上一轮」那个缺陷的根治点，细节见 PromptAssembler 的类注释。
+            val currentTurn = CurrentTurn(
+                id = newId(MessageSender.USER),
+                text = text,
+                timestampMillis = clock(),
+            )
+
             conversation.append(
                 ChatMessage(
-                    id = newId(MessageSender.USER),
+                    id = currentTurn.id,
                     sender = MessageSender.USER,
-                    text = text,
-                    timestampMillis = clock(),
+                    text = currentTurn.text,
+                    timestampMillis = currentTurn.timestampMillis,
                 ),
             )
 
@@ -166,7 +223,13 @@ class ConversationEngine(
                 null
             }
             phase = "召回记忆"
-            val recalled = memory.recall(queryText = text, queryEmbedding = queryEmbedding)
+            // 召回条数跟着预算走：端侧只取 1~2 条，云端可以多给。
+            val recalled = memory.recall(
+                queryText = text,
+                queryEmbedding = queryEmbedding,
+                limit = PromptProfiles.resolve(config.model, isLocalEndpoint(config))
+                    .budget.recallLimit,
+            )
 
             // ---- 4. 组装提示词 ----
             //
@@ -176,7 +239,11 @@ class ConversationEngine(
             val now = clock()
             val history = conversation.messages.value
 
+            // 模型适配档案：决定用哪套人设写法、哪个对话模板、给多少 token。
+            val profile = PromptProfiles.resolve(config.model, isLocalEndpoint(config))
+
             val systemPrompt = PromptAssembler.buildSystemPrompt(
+                profile = profile,
                 prePrompt = config.prePrompt,
                 personas = personas.personas.value,
                 coreMemories = memory.coreMemories(),
@@ -184,6 +251,7 @@ class ConversationEngine(
             )
 
             val volatileContext = PromptAssembler.buildVolatileContext(
+                profile = profile,
                 recalledMemories = recalled.memories.map { it.entry },
                 recalledConversation = recalled.conversationSnippets,
                 todos = policy.todos.value,
@@ -196,14 +264,18 @@ class ConversationEngine(
             )
 
             val turns = PromptAssembler.buildTurns(
+                profile = profile,
                 systemPrompt = systemPrompt,
                 history = history,
                 volatileContext = volatileContext,
+                // 本轮输入显式传进去。它是唯一的真实输入，与 history 快照是否
+                // 已经包含它无关 —— 组装器会在末尾重新追加一次。
+                currentTurn = currentTurn,
             )
 
             // ---- 5. 调模型 ----
             phase = "调用模型"
-            val completion = client.chat(config, turns).getOrElse { throwable ->
+            val completion = client.chat(effectiveConfig(config, profile), turns).getOrElse { throwable ->
                 return fail(
                     throwable.message?.takeIf { it.isNotBlank() } ?: "请求模型失败",
                 )
@@ -277,13 +349,19 @@ class ConversationEngine(
             // 用触发原因本身去召回记忆：「他刚连着开了三次小红书」这种查询，
             // 正好能把「他上次说要戒短视频」这类往事捞出来。
             phase = "召回记忆"
-            val recalled = memory.recall(queryText = reason, queryEmbedding = null)
+            val profile = PromptProfiles.resolve(config.model, isLocalEndpoint(config))
+            val recalled = memory.recall(
+                queryText = reason,
+                queryEmbedding = null,
+                limit = profile.budget.recallLimit,
+            )
 
             phase = "组装提示词"
             val now = clock()
             val history = conversation.messages.value
 
             val systemPrompt = PromptAssembler.buildSystemPrompt(
+                profile = profile,
                 prePrompt = config.prePrompt,
                 personas = personas.personas.value,
                 coreMemories = memory.coreMemories(),
@@ -293,6 +371,7 @@ class ConversationEngine(
             val volatileContext = buildString {
                 append(
                     PromptAssembler.buildVolatileContext(
+                        profile = profile,
                         recalledMemories = recalled.memories.map { it.entry },
                         recalledConversation = recalled.conversationSnippets,
                         todos = policy.todos.value,
@@ -312,16 +391,20 @@ class ConversationEngine(
             }
 
             val turns = PromptAssembler.buildTurns(
+                profile = profile,
                 systemPrompt = systemPrompt,
                 history = history,
                 volatileContext = volatileContext,
+                // 主动盘问没有「他刚说的话」，走临时触发消息那条路。
+                // 它同样保证末尾一定是这一轮的输入（临时触发说明），而不是历史里的旧消息。
                 trailingUserText = PromptAssembler.PROACTIVE_TRIGGER_TEXT,
             )
 
             phase = "调用模型"
-            val completion = client.chat(config, turns).getOrElse { throwable ->
-                return fail(throwable.message?.takeIf { it.isNotBlank() } ?: "请求模型失败")
-            }
+            val completion = client.chat(effectiveConfig(config, profile), turns)
+                .getOrElse { throwable ->
+                    return fail(throwable.message?.takeIf { it.isNotBlank() } ?: "请求模型失败")
+                }
             completion.cacheStats?.let(cache::record)
 
             phase = "解析回复"
