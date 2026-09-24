@@ -97,9 +97,16 @@ class LocalEmbeddingEngine(private val context: Context) {
             session = ortSession
             tokenizer = wordPiece
             inputNames = ortSession.inputNames.toList()
-            loadedDimension = resolveDimension(ortSession)
+            // 维度直接取模型清单里声明的值，不去问 ONNX 的输出形状。
+            //
+            // 试过读 outputInfo，但那个 API 的形状挂在 TensorInfo 上而不是 NodeInfo 上，
+            // 而且中间两维是动态的（-1），真要用还得自己推断。既然我们只内置一个模型，
+            // 从清单里读是唯一不会出错的做法 —— 将来加模型时，清单里本来就要求
+            // 填 dimension（仓库要用它判断「维度变了没有」）。
+            loadedDimension = LocalEmbeddingModels.DEFAULT.dimension
 
             Log.i(TAG, "本地向量模型已加载，维度 $loadedDimension，输入 $inputNames")
+            Unit
         }.onFailure { throwable ->
             Log.e(TAG, "加载本地向量模型失败", throwable)
             // 加载到一半失败时把已建的对象收掉，否则下次重试会叠加一个泄漏的 session。
@@ -142,7 +149,11 @@ class LocalEmbeddingEngine(private val context: Context) {
 
         // 三个输入张量都要显式关掉。它们是 native 内存，靠 GC 回收等于把
         // 「什么时候释放」交给运气 —— 补向量是循环任务，几百轮之后就是一次 OOM。
-        OnnxTensor.createTensor(ortEnvironment, asLongBuffer(encoded.inputIds), shape).use { ids ->
+        //
+        // 这一整条 use 链是函数的**返回值**，所以前面必须有 return：
+        // 少了它，编译器只会说一句「Missing return statement」，
+        // 而不会告诉你「你忘了返回最后那个表达式」。
+        return OnnxTensor.createTensor(ortEnvironment, asLongBuffer(encoded.inputIds), shape).use { ids ->
             OnnxTensor.createTensor(ortEnvironment, asLongBuffer(encoded.attentionMask), shape)
                 .use { mask ->
                 OnnxTensor.createTensor(ortEnvironment, asLongBuffer(encoded.tokenTypeIds), shape)
@@ -222,16 +233,6 @@ class LocalEmbeddingEngine(private val context: Context) {
             pooled[index] /= norm
         }
         return pooled.toList()
-    }
-
-    /** 从模型输出形状里读出维度。读不到就退回模型声明的维度。 */
-    private fun resolveDimension(ortSession: OrtSession): Int = runCatching {
-        val info = ortSession.outputInfo.values.firstOrNull()
-        val shape = info?.shape ?: return@runCatching 0
-        // 末维是已知的（384），中间两维是动态的（-1）。
-        shape.lastOrNull()?.takeIf { it > 0 }?.toInt() ?: 0
-    }.getOrDefault(0).let { detected ->
-        if (detected > 0) detected else LocalEmbeddingModels.DEFAULT.dimension
     }
 
     /** 释放 native 资源。进程退出前调用一次即可。 */

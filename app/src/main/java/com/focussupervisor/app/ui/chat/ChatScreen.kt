@@ -514,8 +514,16 @@ private fun ChatBackgroundLayer(appearance: ChatAppearance) {
     }
 }
 
-/** 纯色背景的兜底色。理论上进不来（选纯色时一定会带一个色值），兜一手防手改备份。 */
-private val FALLBACK_SOLID_BACKGROUND = Color(0xFFEDEDED)
+/**
+ * 纯色背景的兜底色。
+ *
+ * 声明成 **Long 而不是 Color**：它要和 `backgroundSolidColor`（也是 Long）
+ * 一起交给 `Color(...)`。写成 Color 的话，`Long ?: Color` 会被推断成 Any，
+ * 于是 `Color(Any)` 找不到匹配的重载。
+ *
+ * 理论上进不来（选纯色时一定会带一个色值），兜一手防手改过的备份。
+ */
+private const val FALLBACK_SOLID_BACKGROUND = 0xFFEDEDEDL
 
 // ---------------------------------------------------------------------------
 // 底部输入区

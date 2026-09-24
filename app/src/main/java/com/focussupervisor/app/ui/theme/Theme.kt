@@ -136,8 +136,13 @@ enum class PastelTone {
     }
 }
 
-/** 浅色实例（默认值，同时也是 Preview 的兜底值）。 */
-private val LightFocusColors = FocusColors(
+/**
+ * 浅色实例（默认值，同时也是 Preview 的兜底值）。
+ *
+ * `internal` 而不是 `private`：`ChatSkin.kt` 里的 `LocalChatSkin` 需要一个默认值，
+ * 而那行代码在文件之外。默认值必须有东西可指，让它在模块内可见是最直接的做法。
+ */
+internal val LightFocusColors = FocusColors(
     chatBackground = WeChatBackground,
     chromeBackground = ChromeBackground,
     hairline = Hairline,
