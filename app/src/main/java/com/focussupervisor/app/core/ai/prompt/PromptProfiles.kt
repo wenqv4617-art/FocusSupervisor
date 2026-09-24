@@ -19,19 +19,23 @@ import kotlin.math.ceil
  * | 7B+ / 云端 | 能理解分层记忆与复杂约束 | 没有上限问题 |
  *
  * 所以这里做的不是「写五套文案」，而是**按模型量级决定给多少、给什么形式**：
- * 预算（多少 token）、历史（留几轮）、人设（丰满还是极简）、输出格式（给不给范例）、
- * 以及对话模板（ChatML / Llama 3 header）。
+ * 预算（多少 token）、历史（留几轮）、人设（丰满还是极简）、输出格式（给不给范例）。
  *
  * ===========================================================================
  * 五个 Profile 对应什么
  * ===========================================================================
  * ```
  *   A  QWEN_MICRO   0.5B 级  极简、给死格式范例、要求极短回答
- *   B  QWEN_MAIN    1.5B~3B  标准 ChatML，丰满人设，规则与指令分离
+ *   B  QWEN_MAIN    1.5B~3B  丰满人设，规则与指令分离
  *   C  LLAMA        1B~3B    英文底模，顶部加中文强约束锚点
- *   D  REASONING    R1 蒸馏   think 链约束，禁止把指令写进思考
- *   E  CLOUD        云端    全量长上下文、分层记忆、完整时间线
+ *   D  REASONING    R1 系     think 链约束，禁止把指令写进思考
+ *   E  CLOUD        云端     全量长上下文、分层记忆、完整时间线
  * ```
+ *
+ * 应用自己拉起端侧模型的那条路已经移除，但这五档一个都没删：档位判的是
+ * **模型名**，而用户完全可以把端点指向手机上的 Ollama（`qwen2.5:0.5b` 这种
+ * 名字照样会出现），云端也真的会跑 R1 与 Llama。少给一套写法，
+ * 换来的只是那些模型收到一份不合身的提示词。
  */
 
 /** Profile 的稳定 id。 */
@@ -55,21 +59,6 @@ enum class PersonaStyle {
 
     /** 极简单刀直入：三句话讲完身份与底线。适合 0.5B 级。 */
     TERSE,
-}
-
-/**
- * 本地对话模板。
- *
- * 云端走的是 messages 数组，模板由服务端负责；**本地模型拿到的是一个纯字符串**，
- * 所以必须由我们自己把角色标记拼出来，并在末尾留下 assistant 的引导头 ——
- * 少了那个引导头，模型不知道自己该接着谁说话。
- */
-enum class ChatFormat {
-    /** Qwen 系：`<|im_start|>role ... <|im_end|>`，末尾留 `<|im_start|>assistant`。 */
-    CHATML,
-
-    /** Llama 3 系：`<|start_header_id|>role<|end_header_id|>`。 */
-    LLAMA3,
 }
 
 /**
@@ -112,7 +101,6 @@ data class PromptBudget(
  * @param replyLengthHint 写进 system 的回答长度要求。微型档必须给死，
  *        否则它会把一句话写成一段。
  * @param reasoningProtocol R1 系的思考链约束。
- * @param format 本地渲染用的对话模板。
  * @param profileTemperature 建议温度。为 null 表示用用户自己配的值。
  */
 data class PromptProfile(
@@ -121,7 +109,6 @@ data class PromptProfile(
     val description: String,
     val budget: PromptBudget,
     val personaStyle: PersonaStyle,
-    val format: ChatFormat,
     val systemAnchor: String = "",
     val replyLengthHint: String = "",
     val reasoningProtocol: String = "",
@@ -150,7 +137,7 @@ object PromptProfiles {
      *  2. **给死一个输出范例**，让它照着填，而不是让它理解一套规则再自己组织；
      *  3. 明确要求极短回答 —— 小模型写长文必然开始编。
      *
-     * 预算卡在 1500 左右。端侧 0.5B 的预填充速度大约每秒几百 token，
+     * 预算卡在 1500 左右。手机上跑 0.5B 时预填充速度大约每秒几百 token，
      * 1500 token 的提示词对应首字延迟 1 秒上下；再长就直接顶到 3 秒以上，
      * 那时候「秒回」这个唯一的优势也没了。
      */
@@ -159,7 +146,6 @@ object PromptProfiles {
         displayName = "微型模型模式",
         description = "给 0.5B 级模型用的极简提示词：人设三句话、给死输出范例、强制短回答。",
         personaStyle = PersonaStyle.TERSE,
-        format = ChatFormat.CHATML,
         budget = PromptBudget(
             maxPromptTokens = 1500,
             // 3 轮对话。微型模型的注意力很短，给更多历史它反而会去复读更早的内容。
@@ -190,7 +176,7 @@ object PromptProfiles {
      * 分成两段独立说明，而不是混在一段里。1.5B 以上能处理这种结构，
      * 而混在一起的写法会让它把指令格式当成语气要求。
      *
-     * 预算 2048：端侧 1.5B 在旗舰 SoC 上预填充约每秒 300~600 token，
+     * 预算 2048：1.5B 在旗舰 SoC 上预填充约每秒 300~600 token，
      * 2048 token 对应首字 1 秒上下，正好卡在「不觉得卡」的边界内。
      */
     private val QWEN_MAIN = PromptProfile(
@@ -198,7 +184,6 @@ object PromptProfiles {
         displayName = "主力模型模式",
         description = "给 1.5B ~ 3B 模型：丰满的管家人设、规则与指令分离、四轮上下文。",
         personaStyle = PersonaStyle.FULL,
-        format = ChatFormat.CHATML,
         budget = PromptBudget(
             maxPromptTokens = 2048,
             historyMessages = 8,
@@ -247,7 +232,6 @@ object PromptProfiles {
         displayName = "Llama 适配模式",
         description = "给 Llama 3.2 系列：顶部注入中文强约束锚点，使用 Llama 3 原生对话模板。",
         personaStyle = PersonaStyle.FULL,
-        format = ChatFormat.LLAMA3,
         systemAnchor = llamaAnchor(),
         budget = PromptBudget(
             maxPromptTokens = 2048,
@@ -313,7 +297,6 @@ object PromptProfiles {
         displayName = "思考模型模式",
         description = "给 R1 蒸馏系列：允许思考链，但严禁把可执行指令写进思考块。",
         personaStyle = PersonaStyle.FULL,
-        format = ChatFormat.CHATML,
         reasoningProtocol = reasoningProtocol(),
         budget = PromptBudget(
             maxPromptTokens = 2048,
@@ -349,7 +332,6 @@ object PromptProfiles {
         displayName = "云端长文本模式",
         description = "给 DeepSeek V3 / GPT-4o 这类云端模型：长历史、完整分层记忆、完整时间线。",
         personaStyle = PersonaStyle.FULL,
-        format = ChatFormat.CHATML,
         budget = PromptBudget(
             maxPromptTokens = 10_000,
             historyMessages = 24,
@@ -382,8 +364,8 @@ object PromptProfiles {
      *
      * 混在一起的后果是具体的：一个部署在云端的 0.5B 模型，如果按「微型档」发预算，
      * 我们就会为了一个根本不存在首字延迟问题的端点，白白丢掉十几轮对话；
-     * 反过来，一个跑在本机、名字认不出来的模型，如果按「云端档」发预算，
-     * 10000 token 的提示词会让端侧首字延迟直接顶到十几秒。
+     * 反过来，一个跑在手机上、名字认不出来的模型，如果按「云端档」发预算，
+     * 10000 token 的提示词会让首字延迟直接顶到十几秒。
      *
      * 所以：**风格照模型走，预算照运行位置走**。
      *
@@ -399,7 +381,7 @@ object PromptProfiles {
      * 界面上会把**当前判定结果**显示出来，用户看到不对能知道发生了什么。
      *
      * @param model 模型名，例如 `qwen2.5:1.5b`、`deepseek-chat`。
-     * @param isLocal 是否跑在本机（端侧 MediaPipe，或本机 Ollama 的 127.0.0.1）。
+     * @param isLocal 端点是否指向本机环回（手机上跑的 Ollama 就是这种情况）。
      */
     fun resolve(model: String, isLocal: Boolean): PromptProfile {
         val style = resolveStyle(model, isLocal)
@@ -440,7 +422,7 @@ object PromptProfiles {
 
         // ---- 认不出来：按运行位置给默认 ----
         //
-        // 这一步很关键。端侧出现一个我们没见过的模型名时，绝不能退回云端档的风格 ——
+        // 这一步很关键。本机端点出现一个我们没见过的模型名时，绝不能退回云端档的风格 ——
         // 那意味着把写给 70B 的复杂规则喂给一个 1B 模型。
         return if (isLocal) QWEN_MAIN else CLOUD
     }

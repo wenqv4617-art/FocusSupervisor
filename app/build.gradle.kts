@@ -170,11 +170,12 @@ dependencies {
     // 运行时装一个 native 库是做不到的。体积代价见 libs.versions.toml 的注释。
     implementation(libs.onnxruntime.android)
 
-    // ---- 端侧对话模型 --------------------------------------------------------
-    // MediaPipe GenAI 的 LLM Inference：跑下载到本机的 .task 模型。
-    // 只吃 .task（LiteRT 打包格式），不吃 GGUF —— 那是 llama.cpp 的格式。
-    implementation(libs.mediapipe.tasks.genai)
-
+    // ---- 端侧对话模型：已移除 --------------------------------------------------
+    // 这里曾经挂着 MediaPipe GenAI（tasks-genai），用来跑下载到本机的 .task 模型。
+    // 整条链路已经删掉，依赖也一并摘掉 —— 它对 APK 的贡献是每个 ABI 十几 MB 的
+    // 原生库，而那个功能给出的回答质量配不上这个体积。
+    // 不要再加回来：只要 tasks-genai 在依赖里，构建就会把一个 LLM 运行时
+    // 打进包，哪怕一行代码都没用它。
     // ---- 端侧识图（备选 A：中文 OCR）------------------------------------------
     // 模型打包版，不依赖 Google Play 服务。约 +10MB 原生组件，
     // 换来的是「完全离线的屏幕文字理解」。

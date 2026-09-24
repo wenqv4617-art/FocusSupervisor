@@ -161,14 +161,6 @@ data class ChatUiState(
     val isResourceSheetVisible: Boolean = false,
     val timelineEvents: List<TimelineEvent> = emptyList(),
     val nowMillis: Long = System.currentTimeMillis(),
-    /**
-     * 正在流式产出、还没定型的那条 AI 回复。
-     *
-     * 非 null 时消息列表末尾会多显示一条「正在打字」的临时气泡；它**不是一条消息**，
-     * 不进仓库、没有 id、不会落盘。等生成结束，真正的那条 AI 消息由引擎写进仓库，
-     * 这个字段随即清空 —— 界面上看到的是「临时气泡变成正式气泡」，不会闪。
-     */
-    val streamingText: String? = null,
 ) {
     /** 有非空白草稿时才允许发送，避免发出一条空消息。 */
     val canSend: Boolean get() = inputText.isNotBlank()

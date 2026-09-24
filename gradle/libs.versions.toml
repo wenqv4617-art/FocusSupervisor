@@ -62,19 +62,6 @@ mlkitFace = "16.1.7"
 # 直接跑不了。
 onnxRuntime = "1.20.0"
 
-# ---- 端侧对话模型 ---------------------------------------------------------
-# MediaPipe GenAI 的 LLM Inference。
-#
-# 版本选 0.10.22 是**权衡后的结果**，不是随手取的一个：
-#   - 0.10.14 没有 VisionModelOptions（视觉多模态的接口），后面接不了识图；
-#   - 0.10.29 起去掉了 armeabi-v7a，且单 ABI 的 .so 从 11MB 涨到 25MB+；
-#   - 0.10.35 四个 ABI 合计未压缩 103MB，进包会多 17MB 左右。
-# 0.10.22 已经带了 VisionModelOptions，四个 ABI 合计未压缩 44.5MB，
-# 我们只留 arm64-v8a + armeabi-v7a（11.0 + 7.1 MB），进包约 +7MB。
-#
-# 注意：端侧大模型实际上只在 arm64 上可用（1.5B 的 q8 权重就要 1.5GB），
-# armeabi-v7a 那份 .so 留着只是为了不让 32 位设备在加载类时直接崩。
-mediapipeGenai = "0.10.22"
 
 # ML Kit 中文文本识别（**模型打包版**）。
 #
@@ -125,8 +112,6 @@ mlkit-face-detection = { group = "com.google.mlkit", name = "face-detection", ve
 # ---- 本地向量模型 ---------------------------------------------------------
 onnxruntime-android = { group = "com.microsoft.onnxruntime", name = "onnxruntime-android", version.ref = "onnxRuntime" }
 
-# ---- 端侧对话模型 / 识图 ---------------------------------------------------
-mediapipe-tasks-genai = { group = "com.google.mediapipe", name = "tasks-genai", version.ref = "mediapipeGenai" }
 mlkit-text-recognition-chinese = { group = "com.google.mlkit", name = "text-recognition-chinese", version.ref = "mlkitTextChinese" }
 
 # ---- 测试 -----------------------------------------------------------------

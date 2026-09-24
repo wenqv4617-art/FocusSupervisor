@@ -1,13 +1,11 @@
 package com.focussupervisor.app.ui.settings
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
@@ -18,12 +16,12 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.focussupervisor.app.data.repository.BenchmarkResult
 import com.focussupervisor.app.data.repository.LocalModelState
 import com.focussupervisor.app.ui.theme.FocusTheme
 import com.focussupervisor.app.ui.theme.PastelTone
@@ -35,24 +33,31 @@ import java.util.Locale
  * ===========================================================================
  * 为什么需要一个专门的页面
  * ===========================================================================
- * 端侧模型是这个应用里唯一会吃掉几个 GB 的功能，而在这一页出现之前，
- * 三类模型分居三处：
+ * 本地模型是这个应用里唯一会占掉几十上百 MB 的东西，而在这一页出现之前，
+ * 它们分居两处：
  *
  * ```
  *   向量模型  →  「向量模型」面板
- *   对话模型  →  「AI 配置」
  *   识图引擎  →  「注视监控」
  * ```
  *
  * 单看每一处都合理，合起来却有一个说不通的问题：**没有任何一页能回答
- * 「这些加起来占了我多少空间」**。用户在下第三个模型之前最需要知道的恰恰是这个。
+ * 「这些加起来占了我多少空间」**。用户在下第二个模型之前最需要知道的恰恰是这个。
+ *
+ * ===========================================================================
+ * 这里曾经还有第三类：端侧对话模型
+ * ===========================================================================
+ * 0.5B~3.8B 的 `.task` 模型、下载进度、跑分卡片、切换按钮，整整一类已经移除。
+ * 原因不是实现太难，而是**它不划算**：手机上跑得动的那些量级，回答质量明显不如
+ * 云端；而跑得动的上限（3.8B）要占 3.8GB 和一大截运存，还得等它一个字一个字往外吐。
+ * 一个自律监督应用最不能接受的就是「问它一句要等五秒，答得还不一定对」。
  *
  * ===========================================================================
  * 卡片为什么长一个样
  * ===========================================================================
- * 三类模型的元数据完全不同（维度 / 参数量 / 引擎类型），但用户要做的决定是同一个：
+ * 两类模型的元数据不同（维度 / 引擎类型），但用户要做的决定是同一个：
  * 下不下、删不删、用不用、占多少。所以这一页把它们压成同一种卡片，
- * 只在「档位」那一行显示各自的差异。三个长得不一样的列表，回答不了那个问题。
+ * 只在「档位」那一行显示各自的差异。两个长得不一样的列表，回答不了那个问题。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -108,26 +113,14 @@ fun ResourceSheet(
                 subtitle = "把文本变成向量，供记忆检索用。体积小、常驻内存也小。",
                 tone = PastelTone.MINT,
                 items = uiState.embeddingItems,
-                uiState = uiState,
-                viewModel = viewModel,
-            )
-
-            ResourceGroup(
-                title = "对话模型",
-                subtitle = "端侧跑的自律管家本体。下哪一个取决于这台手机的运存，" +
-                    "以及你要「快」还是要「聪明」。",
-                tone = PastelTone.LILAC,
-                items = uiState.llmItems,
-                uiState = uiState,
                 viewModel = viewModel,
             )
 
             ResourceGroup(
                 title = "识图引擎",
-                subtitle = "把屏幕截图变成一句事实，让纯文本模型也能知道屏幕上发生了什么。",
+                subtitle = "把屏幕截图变成一句事实，让对话模型也能知道屏幕上发生了什么。",
                 tone = PastelTone.SKY,
                 items = uiState.visionItems,
-                uiState = uiState,
                 viewModel = viewModel,
             )
 
@@ -178,16 +171,16 @@ private fun ResourceGroup(
     subtitle: String,
     tone: PastelTone,
     items: List<ResourceItem>,
-    uiState: ResourceUiState,
     viewModel: ResourceViewModel,
 ) {
     SheetSection(title = title, subtitle = subtitle, tone = tone) {
+        // 带 key 的 forEach：key 让 Compose 按「这一项是哪张卡」而不是按位置
+        // 去复用节点。卡片会整块在「未下载 / 下载中 / 已就绪」之间换形状，
+        // 没有 key 时位置一变就可能出现「点下去的按钮其实已经是另一张卡」。
         items.forEach { item ->
-            ResourceCard(
-                item = item,
-                isBenchmarking = uiState.benchmarkTargetId == item.id,
-                viewModel = viewModel,
-            )
+            key(item.id) {
+                ResourceCard(item = item, viewModel = viewModel)
+            }
         }
     }
 }
@@ -202,7 +195,6 @@ private fun ResourceGroup(
 @Composable
 private fun ResourceCard(
     item: ResourceItem,
-    isBenchmarking: Boolean,
     viewModel: ResourceViewModel,
 ) {
     Column(
@@ -341,11 +333,7 @@ private fun ResourceCard(
                 )
             }
 
-            is LocalModelState.Ready -> ReadyActions(
-                item = item,
-                isBenchmarking = isBenchmarking,
-                viewModel = viewModel,
-            )
+            is LocalModelState.Ready -> ReadyActions(item = item, viewModel = viewModel)
 
             is LocalModelState.Failed -> {
                 SheetNote(title = "出错了", text = state.message, tone = PastelTone.BLUSH)
@@ -363,11 +351,10 @@ private fun ResourceCard(
 @Composable
 private fun ReadyActions(
     item: ResourceItem,
-    isBenchmarking: Boolean,
     viewModel: ResourceViewModel,
 ) {
     when (item.kind) {
-        // 向量模型与识图引擎的「启用」在各自的功能面板里，这里只提供删除。
+        // 向量模型的「启用」在它自己的功能面板里，这里只提供删除。
         ResourceKind.EMBEDDING -> {
             SheetStatRow(label = "体积", value = item.sizeLabel)
             SheetNote(
@@ -389,90 +376,6 @@ private fun ReadyActions(
                 tone = PastelTone.MINT,
             )
         }
-
-        ResourceKind.LLM -> {
-            SheetStatRow(label = "体积", value = item.sizeLabel)
-            SheetStatRow(
-                label = "建议运存",
-                value = "${item.recommendedRamGb} GB 以上",
-            )
-
-            item.benchmark?.let { result ->
-                BenchmarkCard(result = result)
-            }
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                if (item.isActive) {
-                    SheetPill(text = "当前使用中", tone = PastelTone.MINT)
-                } else {
-                    SheetPrimaryButton(
-                        text = "用它",
-                        enabled = true,
-                        onClick = { viewModel.activateLlm(item) },
-                        modifier = Modifier.weight(1f),
-                    )
-                }
-                SheetSecondaryButton(
-                    text = if (isBenchmarking) "跑分中…" else "测速跑分",
-                    enabled = !isBenchmarking,
-                    onClick = { viewModel.benchmark(item) },
-                    modifier = Modifier.weight(1f),
-                )
-            }
-
-            SheetSecondaryButton(
-                text = "删除模型（释放 ${item.sizeLabel}）",
-                enabled = !isBenchmarking,
-                onClick = { viewModel.delete(item) },
-            )
-        }
-    }
-}
-
-/**
- * 跑分结果。
- *
- * 三个数并排给出来，而不是合成一个「得分」：0.5B 与 3.8B 的对比可能是
- * 「300ms / 18 tok/s / 900MB」对「900ms / 9 tok/s / 3.6GB」——
- * 它们没有优劣之分，是两种取舍。给一个「综合得分 82」等于把选择权从用户手里拿走。
- */
-@Composable
-private fun BenchmarkCard(result: BenchmarkResult) {
-    // 刻意**不**用 SheetSection：那会在这张资源卡片内部再套一层带描边和投影的卡片，
-    // 两层阴影叠在一起会显脏。跑分结果是这张卡片的一部分，用一块淡色底就够了。
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(
-                color = FocusTheme.colors.pastelLilac,
-                shape = RoundedCornerShape(12.dp),
-            )
-            .padding(horizontal = 12.dp, vertical = 10.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        Text(
-            text = "跑分结果",
-            style = MaterialTheme.typography.labelMedium,
-            color = FocusTheme.colors.pastelLilacInk,
-        )
-        SheetStatRow(label = "首字延迟 (TTFT)", value = result.ttftLabel, emphasized = true)
-        SheetStatRow(
-            label = "生成吞吐",
-            value = String.format(Locale.US, "%.1f tok/s", result.tokensPerSecond),
-            emphasized = true,
-        )
-        SheetStatRow(label = "本次生成", value = "${result.outputTokens} token")
-        SheetStatRow(label = "进程内存 (PSS)", value = "${result.memoryPssMb} MB", emphasized = true)
-        SheetStatRow(label = "其中 Java 堆", value = "${result.memoryHeapMb} MB")
-        Text(
-            text = "内存看的是 PSS（整个进程的物理占用，含 native）。只看 Java 堆会得出" +
-                "「才用了十几 MB」这种误导结论 —— 模型权重根本不在 Java 堆上。",
-            style = MaterialTheme.typography.labelSmall,
-            color = FocusTheme.colors.pastelLilacInk.copy(alpha = 0.8f),
-        )
     }
 }
 

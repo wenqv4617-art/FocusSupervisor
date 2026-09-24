@@ -107,11 +107,11 @@ fun DataManageSheet(
             // 第一反应是「数据管理」，而不是去翻那十几个功能格。
             SheetSection(
                 title = "资源管理",
-                subtitle = "下载与管理本机的模型：向量模型、端侧对话模型、识图引擎。",
+                subtitle = "下载与管理本机的模型：向量模型与识图引擎。",
                 tone = PastelTone.LILAC,
             ) {
                 SheetNote(
-                    text = "端侧模型是这个应用里唯一会吃掉几个 GB 的东西。" +
+                    text = "本机模型是这个应用里唯一会占掉几十上百 MB 的东西。" +
                         "这里能一眼看到已经占了多少、全部下载还要多少。",
                     tone = PastelTone.SKY,
                 )

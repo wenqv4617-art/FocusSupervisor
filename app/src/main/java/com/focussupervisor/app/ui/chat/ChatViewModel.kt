@@ -124,6 +124,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
      *
      * 用户消息由 [com.focussupervisor.app.core.ai.ConversationEngine] 负责落库，
      * 所以这里只做两件事：清掉输入框、把「正在等回复」的标记打开。
+     * 界面靠那个标记在列表末尾挂一条「正在思考…」的等待气泡 ——
+     * 请求是一次性返回的，没有这个标记，按下发送之后屏幕上什么都不会变。
      *
      * 失败不在这里处理 —— 引擎会往会话里插一条系统胶囊说明原因，用户能在
      * 聊天记录里看到。这里只负责把转圈停掉。
@@ -137,26 +139,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 inputText = "",
                 isActionPanelVisible = false,
                 isSending = true,
-                // 从空串开始，而不是 null：null 表示「没有在流式」，
-                // 而这里的意思恰恰是「马上要开始了」。先置空串，界面就会立刻
-                // 出现一个空的打字气泡，用户马上知道「它在生成了」——
-                // 端侧模型首字要等半秒到两秒，这段等待必须有个东西在动。
-                streamingText = "",
             )
         }
 
         viewModelScope.launch {
-            // 流式分片只做字符串拼接。真正的渲染交给 Compose，
-            // 这里不做任何格式化、不碰时间戳 —— 那会让每一片都重组一次列表。
-            val outcome = engine.send(draft) { delta ->
-                _uiState.update { state ->
-                    state.copy(streamingText = (state.streamingText ?: "") + delta)
-                }
-            }
+            val outcome = engine.send(draft)
 
-            // 生成结束：清掉临时气泡。真正的那条消息此时已经在仓库里了，
-            // 界面上下一条重组就会把它显示出来。
-            _uiState.update { it.copy(isSending = false, streamingText = null) }
+            // 回复结束：清掉等待气泡。真正的那条消息此时已经在仓库里了，
+            // 界面上下一次重组就会把它显示出来。
+            _uiState.update { it.copy(isSending = false) }
 
             // 「还没配置端点」是个高频且可自愈的失败：直接把配置面板弹出来，
             // 比让用户自己去「+」里翻要少两步。
@@ -259,8 +250,30 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
      * （对话、记忆、待办、备份），资源管理管的是**可下载的模型**。
      * 它们是两件事，只是都跟「磁盘」有关 —— 混在一页里会让那一页长到没人读完。
      * 但入口放在数据管理里，因为用户找「占空间的东西」时先想到的是那里。
+     *
+     * ===========================================================================
+     * 为什么这里要分两步、中间还要等一下
+     * ===========================================================================
+     * 因为这两个面板各自是一个**独立的 Android 窗口**（Material3 的
+     * `ModalBottomSheet` 内部就是一个 Dialog），而 `Dialog.dismiss()` 移除窗口是
+     * **异步**的：它只是往主线程消息队列投了一条消息，真正 removeView 要等到
+     * 下一轮。所以「同一帧里关掉 A、打开 B」的真实结果是：有一小段时间 A 的窗口
+     * 还在窗口栈上，B 的窗口刚加进去。
+     *
+     * 两个都能吃触摸的全屏窗口叠在一起，表现就是**按钮不灵敏 —— 点一下没反应，
+     * 再点一下才生效**（第一下被那个正在消失的窗口拿走了）。这不是玄学，
+     * 是窗口栈的时序问题，所以修法也只能是时序：先关、等它真的走了、再开。
+     *
+     * [SHEET_HANDOFF_DELAY_MILLIS] 给得比「一两帧」宽一些，但远小于人能察觉的
+     * 阈值 —— 用户感知到的是「点一下，页面翻了」，而不是「卡了一下」。
      */
-    fun onOpenResources() = openSheet(SheetTarget.RESOURCES)
+    fun onOpenResources() {
+        closeSheet(SheetTarget.DATA_MANAGE)
+        viewModelScope.launch {
+            delay(SHEET_HANDOFF_DELAY_MILLIS)
+            openSheet(SheetTarget.RESOURCES)
+        }
+    }
 
     fun onResourceSheetDismiss() = closeSheet(SheetTarget.RESOURCES)
 
@@ -618,5 +631,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         const val LOCK_TEST_DURATION_MILLIS = 5_000L
         const val LOCK_TEST_HEADLINE = "强制锁定测试 · 5 秒后自动解除"
         const val COLD_START_NOTICE_LIMIT = 6
+
+        /**
+         * 「关掉一个面板、再打开另一个」之间要等的毫秒数。
+         *
+         * 100ms 大致是 6 帧，足够让上一个 Dialog 的 removeView 真正执行完；
+         * 同时也远低于人能感知到「卡了一下」的门槛（大约 200ms 以上）。
+         * 调小会让那个窗口有机会还没走掉，调大就变成肉眼可见的迟钝。
+         */
+        const val SHEET_HANDOFF_DELAY_MILLIS = 100L
     }
 }

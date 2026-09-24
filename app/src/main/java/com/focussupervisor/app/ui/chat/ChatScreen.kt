@@ -262,7 +262,7 @@ fun ChatScreen(
             onMessageLongPress = onMessageLongPress,
             contentPadding = scaffoldPadding,
             appearance = appearance,
-            streamingText = uiState.streamingText,
+            isSending = uiState.isSending,
         )
     }
 
@@ -437,27 +437,16 @@ private fun MessageList(
     onMessageLongPress: (ChatMessage) -> Unit,
     contentPadding: PaddingValues,
     appearance: ChatAppearance,
-    streamingText: String?,
+    isSending: Boolean,
 ) {
     val listState = rememberLazyListState()
 
-    // 滚动跟着「最后一项的索引」走。
-    //
-    // 之前用 messages.size 当 key，端侧流式输出时会有问题：那条临时气泡**不是消息**，
-    // 它变长时 messages.size 一动不动，于是气泡长到屏幕外了而列表不跟着滚。
-    // 把流式状态也算进 key，两种情况一起覆盖。
-    val lastIndex = messages.size + if (streamingText != null) 1 else 0
+    // 滚动跟着「最后一项的索引」走。等待气泡**不是消息**，
+    // 只算 messages.size 的话它在的时候最后一条会被顶到屏幕外，所以把它也算进去。
+    val lastIndex = messages.size + if (isSending) 1 else 0
     LaunchedEffect(lastIndex) {
         if (lastIndex > 0) {
             listState.animateScrollToItem(lastIndex - 1)
-        }
-    }
-
-    // 流式增长时也要跟着滚，但用 scrollTo 而不是 animateScrollTo：
-    // 每来一个分片就启动一次动画，会把上一个动画打断，观感是一跳一跳的。
-    LaunchedEffect(streamingText?.length) {
-        if (streamingText != null && lastIndex > 0) {
-            listState.scrollToItem(lastIndex - 1)
         }
     }
 
@@ -499,19 +488,23 @@ private fun MessageList(
                         )
                     }
 
-                    // 正在流式产出的临时气泡。
+                    // 等待回复时的临时气泡。
                     //
                     // 它不是一条消息：没有 id、不进仓库、不会落盘，长按也没有反应
                     // （对一条还不存在的东西做「编辑 / 删除」是没有意义的）。
-                    // 生成结束后引擎会把正式消息写进仓库，这条随即消失 ——
-                    // 用户看到的是「打字气泡变成正式气泡」，中间不会闪。
-                    if (streamingText != null) {
-                        item(key = STREAMING_ITEM_KEY) {
+                    // 回复到达后引擎把正式消息写进仓库，这条随即消失 ——
+                    // 用户看到的是「等待气泡变成正式气泡」，中间不会闪。
+                    //
+                    // 它出现的原因很实际：请求是一次性返回的（不是流式），
+                    // 云端想几秒是常事。没有这条气泡，用户按下发送之后屏幕上
+                    // **什么都不会变**，只能怀疑是不是没点上。
+                    if (isSending) {
+                        item(key = PENDING_ITEM_KEY) {
                             MessageBubble(
                                 message = ChatMessage(
-                                    id = STREAMING_ITEM_KEY,
+                                    id = PENDING_ITEM_KEY,
                                     sender = MessageSender.AI,
-                                    text = streamingText.ifEmpty { "正在生成…" },
+                                    text = PENDING_TEXT,
                                     timestampMillis = System.currentTimeMillis(),
                                 ),
                                 personas = personas,
@@ -526,13 +519,14 @@ private fun MessageList(
 }
 
 /**
- * 流式临时气泡的稳定 key。
+ * 等待气泡的稳定 key 与文案。
  *
- * 用一个不可能与真实消息相撞的字符串：真实消息的 id 是 UUID，
+ * key 用一个不可能与真实消息相撞的字符串：真实消息的 id 是 UUID，
  * 而这个 key 一旦与某条真实消息相同，Compose 会把那个 item 当成同一条来复用，
- * 表现是那条历史消息在生成期间突然变成打字气泡。
+ * 表现是那条历史消息在等待期间突然变成一个「正在思考」的气泡。
  */
-private const val STREAMING_ITEM_KEY = "__streaming__"
+private const val PENDING_ITEM_KEY = "__pending_reply__"
+private const val PENDING_TEXT = "正在思考…"
 
 /**
  * 聊天区背景层。

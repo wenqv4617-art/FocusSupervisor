@@ -1,14 +1,17 @@
 # FocusSupervisor
 
-AI 监督自律 App。当前处于**阶段九**：对话与推理彻底走向端侧。
+AI 监督自律 App。当前处于**阶段九**：提示词工程、端侧识图与资源管理。
 
 - 修掉了一个真实存在过的缺陷：AI 总是回答**上一轮**的内容；
-- 提示词有了双轨预算（云端 10k / 端侧严格 2048），并针对 Qwen、Llama、
+- 提示词有了双轨预算（云端 10k / 本机端点严格 2048），并针对 Qwen、Llama、
   R1 思考模型、云端各写了一套适配；
-- 端侧对话模型矩阵接上了（MediaPipe GenAI），带逐字打字机与跑分；
 - 识图多了一条完全本机的路：ML Kit 中文 OCR 把屏幕变成一句事实，
-  **纯文本对话模型也能知道屏幕上发生了什么**；
-- 三类模型（向量 / 对话 / 识图）收进了「资源管理」一页。
+  **不看图的对话模型也能知道屏幕上发生了什么**；
+- 模型资源（向量 / 识图）收进了「资源管理」一页；
+- **端侧对话模型整条链路被移除**。它曾经能跑（四个 `.task` 模型、逐字输出、
+  跑分卡片都在），但真机上试过之后结论很清楚：手机上跑得动的量级答得不够聪明，
+  答得够聪明的量级跑不动。宁可删掉，也不留一个「装得上、用不下去」的功能。
+  见「为什么删掉了端侧对话模型」一节。
 
 ---
 
@@ -24,7 +27,7 @@ AI 监督自律 App。当前处于**阶段九**：对话与推理彻底走向端
 | 六 | 小窗/画中画拦截、端侧注视监控（CameraX + ML Kit） | 已完成 |
 | 七 | 主动盘问引擎、跨天机制、待办闭环 | 已完成 |
 | 八 | 聊天页美化（主题 + 背景图 + 样式注入）、数据管理与分片备份、本地向量模型、面板淡彩重做 | 已完成 |
-| 九 | 对话时序缺陷修复、双轨 Token 预算、五套模型个性化提示词、端侧对话模型矩阵与跑分、端侧识图、资源管理 | 当前 |
+| 九 | 对话时序缺陷修复、双轨 Token 预算、模型个性化提示词、端侧识图、模型资源管理；端侧对话模型试做后移除 | 当前 |
 
 ## 交付物一览
 
@@ -57,7 +60,6 @@ AI 监督自律 App。当前处于**阶段九**：对话与推理彻底走向端
 | 监督时间线的事件类型与容量取舍 | `app/src/main/java/com/focussupervisor/app/domain/model/TimelineModels.kt` |
 | 注视监控配置与 VisionStatus | `app/src/main/java/com/focussupervisor/app/domain/model/GazeModels.kt` |
 | 聊天页外观、样式注入的解析结果 | `app/src/main/java/com/focussupervisor/app/domain/model/AppearanceModels.kt` |
-| 端侧对话模型矩阵（四个真实可下 + 自定义入口） | `app/src/main/java/com/focussupervisor/app/domain/model/LocalLlmModels.kt` |
 | 识图来源与两档端侧引擎（含「暂不可用」的原因） | `app/src/main/java/com/focussupervisor/app/domain/model/VisionModels.kt` |
 
 ### 数据层
@@ -80,7 +82,6 @@ AI 监督自律 App。当前处于**阶段九**：对话与推理彻底走向端
 | 聊天页外观仓库（主题 / 背景图落盘 / 样式文本） | `app/src/main/java/com/focussupervisor/app/data/repository/AppearanceRepository.kt` |
 | 本地向量模型仓库（下载状态机 + 引擎加载） | `app/src/main/java/com/focussupervisor/app/data/repository/LocalModelRepository.kt` |
 | 数据管理仓库（体量统计 + 导出 + 恢复的原子性） | `app/src/main/java/com/focussupervisor/app/data/repository/DataMaintenanceRepository.kt` |
-| 端侧对话模型仓库（状态机 + 引擎生命周期 + 跑分） | `app/src/main/java/com/focussupervisor/app/data/repository/LocalLlmRepository.kt` |
 
 ### 能力层（core）
 
@@ -106,8 +107,6 @@ AI 监督自律 App。当前处于**阶段九**：对话与推理彻底走向端
 | BERT WordPiece 分词器（中文按字、英文按最长匹配） | `app/src/main/java/com/focussupervisor/app/core/ai/WordPieceTokenizer.kt` |
 | 本地向量引擎（ONNX Runtime + mean pooling + L2 归一化） | `app/src/main/java/com/focussupervisor/app/core/ai/LocalEmbeddingEngine.kt` |
 | 五套模型个性化提示词档案 + Token 估算 + 双轨预算 | `app/src/main/java/com/focussupervisor/app/core/ai/prompt/PromptProfiles.kt` |
-| 本地对话模板渲染（ChatML / Llama 3，末尾留 assistant 引导头） | `app/src/main/java/com/focussupervisor/app/core/ai/prompt/ChatTemplate.kt` |
-| MediaPipe 端侧对话模型客户端（懒加载 + 显式释放 + 流式） | `app/src/main/java/com/focussupervisor/app/core/ai/LocalLlmClient.kt` |
 | 端侧识图引擎（ML Kit OCR + 启发式提炼） | `app/src/main/java/com/focussupervisor/app/core/vision/LocalVisionEngine.kt` |
 
 ### 系统服务
@@ -153,7 +152,7 @@ AI 监督自律 App。当前处于**阶段九**：对话与推理彻底走向端
 | 数据管理面板的状态持有者 | `app/src/main/java/com/focussupervisor/app/ui/settings/DataManageViewModel.kt` |
 | 背景图裁剪（拖动 + 捏合缩放，自绘不引库） | `app/src/main/java/com/focussupervisor/app/ui/components/ImageCropScreen.kt` |
 | 按路径异步加载图片（解码不进主线程） | `app/src/main/java/com/focussupervisor/app/ui/components/FileImage.kt` |
-| 资源管理面板（向量 / 对话 / 识图三类模型一页管完） | `app/src/main/java/com/focussupervisor/app/ui/settings/ResourceSheet.kt` |
+| 资源管理面板（向量 / 识图两类模型一页管完） | `app/src/main/java/com/focussupervisor/app/ui/settings/ResourceSheet.kt` |
 | 资源管理面板的状态持有者 | `app/src/main/java/com/focussupervisor/app/ui/settings/ResourceViewModel.kt` |
 
 ---
@@ -164,7 +163,6 @@ AI 监督自律 App。当前处于**阶段九**：对话与推理彻底走向端
 - Preferences DataStore 1.1.7（持久化）+ OkHttp 4.12.0（网络）
 - CameraX 1.4.2（取帧）+ ML Kit 人脸检测 16.1.7（模型打包版）
 - ONNX Runtime 1.20.0（`onnxruntime-android`）：在手机上跑本地向量模型
-- MediaPipe GenAI 0.10.22（`tasks-genai`）：在手机上跑本地对话模型
 - ML Kit 中文文本识别 16.0.1（打包版）：完全离线的屏幕文字理解
 - AGP 8.7.3，Gradle 8.11.1，JDK 17
 - `compileSdk = 35`，`minSdk = 26`，`targetSdk = 35`
@@ -850,42 +848,45 @@ D 那条不是洁癖：思考链是会被用户看到的，而且解析器**会�
 模型在思考里写「也许该放行小红书」，解析器就真的放行了。
 
 **风格照模型走，预算照运行位置走。** 混在一起的具体后果：云端 0.5B 按微型档发预算
-会白丢十几轮对话；端侧未识别的模型按云端档发预算会让首字延迟顶到十几秒。
+会白丢十几轮对话；跑在手机上、名字又认不出来的模型按云端档发预算，会让首字延迟顶到十几秒。
+
+「本机」现在只有一个判据：地址指向环回（有人把 Ollama 跑在手机上）。
+应用自己拉起端侧模型那条路已经移除，但五档一个都没删 —— 档位判的是**模型名**，
+而用户完全可以把端点指向本机 Ollama（`qwen2.5:0.5b` 这种名字照样会出现），
+云端也真的会跑 R1 与 Llama。
 
 ---
 
-## 端侧对话模型矩阵
+## 为什么删掉了端侧对话模型
 
-MediaPipe 只吃 `.task` 打包格式。原计划的 Qwen2.5 3B / 7B **在全世界都没有这个格式**
-（只有 GGUF，那是 llama.cpp 的另一套运行时）；Gemma 全系有 `.task` 但被 Google 门控，
-要 HF token，做不到一键下载。所以上的是四个真实能下、校验值可核对的：
+阶段九最初是往「把对话也搬到手机本地」做的，而且做完了：MediaPipe GenAI 跑 `.task`
+模型，四个真实可下载的模型（Qwen2.5 0.5B / 1.5B、R1-Distill 1.5B、Phi-4-mini 3.8B），
+逐字输出、跑分卡片、下载续传、SHA-256 校验、显式释放，全都实现过并通过了 CI。
 
-| 模型 | 体积 | 建议运存 | 定位 |
-| --- | --- | --- | --- |
-| Qwen2.5 0.5B | 522 MB | 6 GB | 极速档，秒回 |
-| Qwen2.5 1.5B | 1.5 GB | 8 GB | 均衡档（推荐） |
-| DeepSeek-R1-Distill-Qwen 1.5B | 1.8 GB | 8 GB | 思考档 |
-| Phi-4-mini 3.8B | 3.8 GB | 12 GB | 旗舰档 |
+**真机装上之后，结论是这条路不划算，于是整条链路被删掉了。** 不是实现不好，是取舍：
 
-另留**自定义模型入口**：将来 3B / 7B 的 `.task` 一发布，填地址与校验值就能加。
+| 量级 | 回答质量 | 代价 |
+| --- | --- | --- |
+| 0.5B / 1.5B | 答得动，但经常答偏、复读、抓不住上下文 | 0.5~1.5GB 磁盘，首字半秒到两秒 |
+| 3.8B | 明显更好，仍然不如云端 | 3.8GB 磁盘 + 数 GB 运存，手机开始杀别的应用 |
 
-下载源是 hf-mirror（国内可直连），但**完整性靠的是 SHA-256 而不是来源**。
+而自律监督这个场景对回答质量的要求恰恰不低：它要理解一句含糊的辩解、要判断该不该
+放行、要在正确的时候说正确的话。一个「问它一句要等五秒、答得还不一定对」的管家，
+用户第三次就不会再打开它了。
 
-### 跑分给三个数，不给一个「得分」
+更关键的是**它给人的期待是错的**：列表里摆着四个模型、有体积有跑分，用户会以为
+「下完就能离线用」。实际下完之后得到的是一个明显更差的助手 —— 那比一开始就没有
+这个选项更糟。
 
-| 指标 | 决定什么 |
-| --- | --- |
-| 首字延迟 TTFT | 卡不卡 |
-| 生成吞吐 tok/s | 读完要多久 |
-| 进程内存 PSS | 还能不能同时开别的应用 |
+所以现在只有一条对话路径：**OpenAI 兼容端点**（云端，或用户自己在手机上跑的
+Ollama）。离线优先这件事依旧成立，只是它由向量模型与识图引擎承担 ——
+那两块留在本机是因为它们**在自己的位置上真的做得更好**：本地向量让记忆检索
+不依赖网络，本地 OCR 让监督者不必把屏幕截图发出去。它们不是「本地版的云端功能」，
+而是本来就只有本地做才合理的事。
 
-0.5B 与 3.8B 的对比可能是「300ms / 18 tok/s / 900MB」对「900ms / 9 tok/s / 3.6GB」——
-它们没有优劣之分，是两种取舍。给一个「综合得分 82」等于把选择权从用户手里拿走。
-
-内存看的是 **PSS** 而不是 Java 堆：模型权重在 native 堆上，看 Java 堆会得出
-「才用了 3MB」这种误导结论。
-
----
+删掉的东西（以及为什么不留着但默认关闭）：只要 `tasks-genai` 还在依赖里，
+构建就会把一个 LLM 运行时打进包，每个 ABI 十几 MB 的原生库，哪怕一行代码都不用。
+一个永远不打开的开关不是「保留可能性」，是**给未来的人留一个必须读懂的谜题**。
 
 ## 端侧识图：让纯文本模型也能看见
 
@@ -897,7 +898,7 @@ MediaPipe 只吃 `.task` 打包格式。原计划的 Qwen2.5 3B / 7B **在全世
 ```
   截屏 ──本地解析──> 一句 40 字以内的事实 ──> 时间线
                                                 │
-                      对话端（云端 DeepSeek 或端侧纯文本 Qwen）都能读到
+                          对话端点（不看图的纯文本模型）也能读到
 ```
 
 ### 备选 A · ML Kit 中文 OCR（默认，已可用）
@@ -923,17 +924,34 @@ MediaPipe 只吃 `.task` 打包格式。原计划的 Qwen2.5 3B / 7B **在全世
 
 「+」→「数据管理」→「管理模型资源」。
 
-在这之前，三类模型分居三处（向量在「向量模型」、对话在「AI 配置」、识图在「注视监控」）。
+在这之前，本机模型分居两处（向量在「向量模型」、识图在「注视监控」）。
 单看每一处都合理，合起来却有一个说不通的问题：**没有任何一页能回答
-「这些加起来占了我多少空间」** —— 而端侧模型恰恰是这个应用里唯一会吃掉几个 GB 的功能。
+「这些加起来占了我多少空间」**。
 
-所以这一页把三类压成同一种卡片，用户要做的决定是同一个：下不下、删不删、用不用、占多少。
+所以这一页把它们压成同一种卡片，用户要做的决定是同一个：下不下、删不删、用不用、占多少。
+顶部一行给出「已占 / 全部下载需要」—— 一个还没有下任何东西的用户最需要知道的
+就是这个总数。
+
+### 那个「点两次才生效」的缺陷
+
+资源管理是从数据管理里点进去的，而这两个面板各自是一个**独立的 Android 窗口**
+（Material3 的 `ModalBottomSheet` 内部就是一个 Dialog）。`Dialog.dismiss()` 移除窗口
+是**异步**的：它只往主线程消息队列投一条消息，真正 `removeView` 要等到下一轮。
+于是「同一帧里关掉 A、打开 B」的真实结果是：有一小段时间 A 的窗口还在窗口栈上，
+B 的窗口刚加进去 —— 两个都能吃触摸的全屏窗口叠在一起，第一下点击就被那个
+正在消失的窗口拿走了，表现为**按钮不灵敏、要点两次**。
+
+修法只能是时序：先关、等 100ms（约 6 帧，足够 `removeView` 执行完，
+又远低于人能感知到卡顿的 200ms 门槛）、再开。这不是权宜之计，
+而是同一个进程里同时存在两个模态窗口这件事本身的代价。
 
 ---
 
 ## 阶段边界（现在还没有的东西）
 
-- **没有流式输出**：对话是一次性等模型生成完再上屏，没有逐字效果（下一阶段）；
+- **没有流式输出**：对话是一次性等模型生成完再上屏，没有逐字效果。等待期间列表末尾
+  会挂一条「正在思考…」的临时气泡（它**不是一条消息**，不进仓库、不落盘），
+  否则用户按下发送之后屏幕上什么都不会变，只能怀疑是不是没点上；
 - **待办**：面板里可以自己增 / 勾 / 删，AI 也能通过指令改 —— 闭环已经通了。
   截止时间只给三个纯算术区间（30 分钟 / 1 小时 / 3 小时），要精确时间随时可以让 AI
   用指令改（它接受 `yyyy-MM-dd HH:mm`）；
@@ -960,15 +978,13 @@ MediaPipe 只吃 `.task` 打包格式。原计划的 Qwen2.5 3B / 7B **在全世
 - **ML Kit 打包版在无 GMS 机型上的可用性**：官方没有明文保证（POM 里仍有
   `play-services-*` 传递依赖）。代码对初始化与检测失败都做了兜底 —— 失败只发一条
   错误状态，不影响其它功能。真机是国产无 GMS ROM 的话需要实测一次。
-- **端侧对话模型只在 arm64 上真正可用**：1.5B 的 q8 权重就要 1.5GB，
-  32 位设备跑不动。包里留着 armeabi-v7a 的 MediaPipe 原生库，
-  只是为了不让老设备在加载类时直接崩 —— 功能本身会返回一句中文错误；
-- **端侧默认用 CPU 后端**：GPU 在支持的机型上快得多，但驱动不兼容时不是抛异常，
-  而是直接崩在 native 层（SIGSEGV），连一句中文错误都给不出来。先能跑，再快；
-- **端侧模型切换会重新加载**：从 0.5B 换到 3.8B 要几秒（读 3.8GB 的文件），
-  而且切换时**必须**先释放旧模型 —— 两块权重同时在内存里接近 5.5GB，几乎没有手机扛得住；
-- **APK 已经 56MB**：MediaPipe（约 +7MB）+ ML Kit 中文 OCR（约 +10MB）。
-  想减的话，最直接的一刀是去掉 armeabi-v7a —— 但会连带影响 ML Kit 与 ONNX 的老设备可用性；
+- **对话没有离线路径**：应用自己拉起端侧模型那条路已经删掉（理由见上面那一节）。
+  想完全离线对话，唯一的办法是在手机上跑一个 Ollama 之类的服务、把端点指向
+  环回地址 —— 那时提示词会自动按本机端点的预算收紧；
+- **APK 的主要体积是两件事**：ML Kit 中文 OCR（约 +10MB 原生组件）与
+  ONNX Runtime（约 +13MB）。两者都没有云端替代方案 —— 本地向量与本地识图
+  之所以在包里，正是因为它们要能离线跑。想减的话，最直接的一刀是去掉
+  armeabi-v7a，但会连带影响 ML Kit 与 ONNX 的老设备可用性；
 - **备选 B（微型 VLM）没有运行时**：见「端侧识图」一节。架构已就位，运行时一发布即可接上；
 - **样式注入不是 CSS**：认得的只有一份固定的选择器与属性清单（见「聊天页美化」一节），
   没有后代选择器、没有伪类、没有 `rgb()` 与具名颜色。这是 Compose 的架构决定的，

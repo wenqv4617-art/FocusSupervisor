@@ -1,16 +1,13 @@
 package com.focussupervisor.app.core.ai
 
 import android.util.Log
-import com.focussupervisor.app.core.ai.prompt.ChatTemplate
 import com.focussupervisor.app.core.ai.prompt.PromptProfile
 import com.focussupervisor.app.core.ai.prompt.PromptProfiles
-import com.focussupervisor.app.core.network.ChatTurn
 import com.focussupervisor.app.core.network.OpenAiCompatibleClient
 import com.focussupervisor.app.data.repository.AiConfigRepository
 import com.focussupervisor.app.data.repository.AppPolicyRepository
 import com.focussupervisor.app.data.repository.ConversationRepository
 import com.focussupervisor.app.data.repository.GazeRepository
-import com.focussupervisor.app.data.repository.LocalLlmRepository
 import com.focussupervisor.app.data.repository.LocalModelRepository
 import com.focussupervisor.app.data.repository.MemoryRepository
 import com.focussupervisor.app.data.repository.PersonaRepository
@@ -26,7 +23,6 @@ import com.focussupervisor.app.domain.model.MemorySource
 import com.focussupervisor.app.domain.model.MessageSender
 import com.focussupervisor.app.domain.model.TodoItem
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.flow.collect
 import java.util.UUID
 
 /** 一次发送的结果。 */
@@ -87,49 +83,8 @@ class ConversationEngine(
     private val cache: PromptCacheRepository,
     private val gaze: GazeRepository,
     private val localModel: LocalModelRepository,
-    private val localLlm: LocalLlmRepository,
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
-
-    /**
-     * 端侧生成。
-     *
-     * ===========================================================================
-     * 提示词在这里才被渲染成字符串
-     * ===========================================================================
-     * 云端交出去的是 `messages` 数组（角色由服务端按自己的模板渲染）；
-     * 端侧交出去的是**一个纯字符串**，ChatML 或 Llama 3 的标记要我们自己拼，
-     * 末尾那个 assistant 引导头更是少不得（见 [ChatTemplate]）。
-     *
-     * @param onPartial 每个分片回调一次，界面据此做打字机效果。
-     */
-    private suspend fun generateLocally(
-        profile: PromptProfile,
-        turns: List<ChatTurn>,
-        onPartial: (suspend (String) -> Unit)?,
-    ): Result<String> {
-        val engine = localLlm.ensureReady().getOrElse { return Result.failure(it) }
-        val prompt = ChatTemplate.render(profile.format, turns)
-
-        val builder = StringBuilder()
-        return try {
-            engine.generate(prompt).collect { delta ->
-                builder.append(delta)
-                // 分片先上屏，再等下一个。界面那边只做字符串拼接，不会有重活。
-                onPartial?.invoke(delta)
-            }
-            if (builder.isEmpty()) {
-                Result.failure(IllegalStateException("端侧模型没有输出任何内容"))
-            } else {
-                Result.success(builder.toString())
-            }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (throwable: Throwable) {
-            Log.e(TAG, "端侧生成失败", throwable)
-            Result.failure(throwable)
-        }
-    }
 
     /**
      * 端点是不是跑在**这台手机**上。
@@ -137,38 +92,42 @@ class ConversationEngine(
      * ===========================================================================
      * 为什么这件事决定了整个提示词预算
      * ===========================================================================
-     * 云端与端侧的成本结构完全不同：
+     * 云端与本机的成本结构完全不同：
      *
      *  - 云端：长提示词只是多花点钱，缓存命中还能打折。10k token 无所谓。
-     *  - 端侧：长提示词**直接就是等待时间**。SoC 的预填充速度是每秒几百 token，
+     *  - 本机：长提示词**直接就是等待时间**。手机 SoC 的预填充速度是每秒几百 token，
      *    10k token 意味着用户按下发送之后要盯着屏幕半分钟才看到第一个字。
      *
-     * 所以预算按运行位置分轨，而运行位置只有两个判据：
-     *  1. 用户在配置里明确选了端侧模型（[AiConfig.useLocalModel]）；
-     *  2. 地址指向本机环回（本机 Ollama 就是这种情况）。
+     * 所以预算按运行位置分轨。现在判据只剩一个：**地址是否指向环回**。
+     *
+     * 这里曾经有第二个判据 ——「用户在本机模型列表里选了一个 .task 模型」。
+     * 那条路（应用自己拉起端侧对话模型）已经移除，因为一个 0.5~4GB 的模型
+     * 在手机上给出的回答质量配不上它占的空间和等待时间。但环回这一条必须留着：
+     * 有人把 Ollama 跑在手机上（或通过 Termux），那种情况算力仍然在这台设备上，
+     * 按云端发预算会让首字延迟直接顶起来。
      *
      * 不认 `10.0.2.2`：那是 Android 模拟器里访问**开发机**的地址，
-     * 算力在电脑上而不在手机上，按端侧给它压预算没有意义。
+     * 算力在电脑上而不在手机上，按本机给它压预算没有意义。
      */
-    /**
-     * 按档位给出实际用于请求的配置。
-     *
-     * 唯一会覆盖用户设置的是**采样温度**，而且只在端侧生效。
-     * 理由是具体的：0.5B 级模型对温度极其敏感 —— 0.7 会让它开始自由发挥、
-     * 车轱辘话来回说，而这些小模型恰恰是「照着格式输出」比「有创意」重要得多。
-     * 云端不动用户的值：那是他手调的，中大型模型也完全承受得住。
-     */
-    private fun effectiveConfig(config: AiConfig, profile: PromptProfile): AiConfig {
-        val recommended = profile.profileTemperature ?: return config
-        return if (isLocalEndpoint(config)) config.copy(temperature = recommended) else config
-    }
-
     private fun isLocalEndpoint(config: AiConfig): Boolean {
         val url = config.baseUrl.lowercase()
         return url.contains("127.0.0.1") ||
             url.contains("localhost") ||
             url.contains("0.0.0.0") ||
             url.contains("[::1]")
+    }
+
+    /**
+     * 按档位给出实际用于请求的配置。
+     *
+     * 唯一会覆盖用户设置的是**采样温度**，而且只在环回端点上生效。
+     * 理由是具体的：小模型对温度极其敏感 —— 0.7 会让它开始自由发挥、
+     * 车轱辘话来回说，而小模型恰恰是「照着格式输出」比「有创意」重要得多。
+     * 云端不动用户的值：那是他手调的，中大型模型也完全承受得住。
+     */
+    private fun effectiveConfig(config: AiConfig, profile: PromptProfile): AiConfig {
+        val recommended = profile.profileTemperature ?: return config
+        return if (isLocalEndpoint(config)) config.copy(temperature = recommended) else config
     }
 
     /**
@@ -210,14 +169,7 @@ class ConversationEngine(
      * **不会抛异常**（除协程取消外）。任何失败都会变成本方法返回的 [SendOutcome.Failed]，
      * 同时往会话里插一条系统胶囊。
      */
-    /**
-     * @param onPartial 流式分片回调。端侧模型逐字产出时会调用它（打字机效果）；
-     *        云端路径目前是一次性返回，不会调用。为 null 表示不需要流式。
-     */
-    suspend fun send(
-        userText: String,
-        onPartial: (suspend (String) -> Unit)? = null,
-    ): SendOutcome {
+    suspend fun send(userText: String): SendOutcome {
         val text = userText.trim()
         if (text.isEmpty()) return SendOutcome.Sent
 
@@ -268,15 +220,7 @@ class ConversationEngine(
             // ---- 3. 召回记忆 ----
             phase = "读取向量配置"
             // 档案要先算出来：召回条数跟着它的预算走。
-            val runningLocal = config.useLocalModel
-            val profile = if (runningLocal) {
-                PromptProfiles.resolveStyle(
-                    localLlm.selected.value.promptModelName,
-                    isLocal = true,
-                )
-            } else {
-                PromptProfiles.resolve(config.model, isLocalEndpoint(config))
-            }
+            val profile = PromptProfiles.resolve(config.model, isLocalEndpoint(config))
             val embeddingConfig = aiConfig.embeddingConfigNow()
             val queryEmbedding = if (embeddingConfig.isUsable) {
                 embedTexts(embeddingConfig, listOf(text)).getOrNull()?.firstOrNull()
@@ -284,7 +228,7 @@ class ConversationEngine(
                 null
             }
             phase = "召回记忆"
-            // 召回条数跟着预算走：端侧只取 1~2 条，云端可以多给。
+            // 召回条数跟着预算走：本机端点只取 1~2 条，云端可以多给。
             val recalled = memory.recall(
                 queryText = text,
                 queryEmbedding = queryEmbedding,
@@ -332,30 +276,23 @@ class ConversationEngine(
 
             // ---- 5. 调模型 ----
             //
-            // 两条路在这里分开，而且**互斥**：端侧模式绝不偷偷回退到云端。
-            // 理由不是技术洁癖 —— 对一个自律监督应用来说，「我明明关了网它怎么还能
-            // 回话」是最不该出现的疑问，而那正是自动回退会造成的现象。
+            // 这里曾经有一个分支：用户选了本机下载的 .task 模型就走端侧生成，
+            // 而且与云端**互斥**、绝不回退（「我明明关了网它怎么还能回话」是最不该
+            // 出现的疑问）。那条路已经移除 —— 端侧小模型的回答质量配不上它占的
+            // 空间与等待时间。现在只剩一条路：调用 OpenAI 兼容端点。
             phase = "调用模型"
-            val reply = if (runningLocal) {
-                generateLocally(profile, turns, onPartial).getOrElse { throwable ->
+            val completion = client.chat(effectiveConfig(config, profile), turns)
+                .getOrElse { throwable ->
                     return fail(
-                        throwable.message?.takeIf { it.isNotBlank() } ?: "端侧模型生成失败",
+                        throwable.message?.takeIf { it.isNotBlank() } ?: "请求模型失败",
                     )
                 }
-            } else {
-                val completion = client.chat(effectiveConfig(config, profile), turns)
-                    .getOrElse { throwable ->
-                        return fail(
-                            throwable.message?.takeIf { it.isNotBlank() } ?: "请求模型失败",
-                        )
-                    }
 
-                // usage 里有缓存命中数就记下来，给「AI 配置」面板显示。
-                // 端点没上报时 cacheStats 为 null —— 那是「看不到」，不是「没命中」，
-                // 两者必须区分，否则会去优化一个本来就正常的东西。
-                completion.cacheStats?.let(cache::record)
-                completion.content
-            }
+            // usage 里有缓存命中数就记下来，给「AI 配置」面板显示。
+            // 端点没上报时 cacheStats 为 null —— 那是「看不到」，不是「没命中」，
+            // 两者必须区分，否则会去优化一个本来就正常的东西。
+            completion.cacheStats?.let(cache::record)
+            val reply = completion.content
 
             // ---- 6. 解析指令 ----
             phase = "解析回复"
@@ -419,16 +356,7 @@ class ConversationEngine(
             // 用触发原因本身去召回记忆：「他刚连着开了三次小红书」这种查询，
             // 正好能把「他上次说要戒短视频」这类往事捞出来。
             phase = "召回记忆"
-            // 与 send 一致：端侧模式下档案看的是选中的那个 .task 模型。
-            val runningLocal = config.useLocalModel
-            val profile = if (runningLocal) {
-                PromptProfiles.resolveStyle(
-                    localLlm.selected.value.promptModelName,
-                    isLocal = true,
-                )
-            } else {
-                PromptProfiles.resolve(config.model, isLocalEndpoint(config))
-            }
+            val profile = PromptProfiles.resolve(config.model, isLocalEndpoint(config))
             val recalled = memory.recall(
                 queryText = reason,
                 queryEmbedding = null,
@@ -480,24 +408,14 @@ class ConversationEngine(
             )
 
             phase = "调用模型"
-            // 主动盘问也走同一条分流。它没有流式回调 —— 盘问是一条主动弹出的
-            // 短消息，打字机效果在这里只会让它显得犹豫。
-            val replyText = if (runningLocal) {
-                generateLocally(profile, turns, onPartial = null).getOrElse { throwable ->
+            val completion = client.chat(effectiveConfig(config, profile), turns)
+                .getOrElse { throwable ->
                     return fail(
-                        throwable.message?.takeIf { it.isNotBlank() } ?: "端侧模型生成失败",
+                        throwable.message?.takeIf { it.isNotBlank() } ?: "请求模型失败",
                     )
                 }
-            } else {
-                val completion = client.chat(effectiveConfig(config, profile), turns)
-                    .getOrElse { throwable ->
-                        return fail(
-                            throwable.message?.takeIf { it.isNotBlank() } ?: "请求模型失败",
-                        )
-                    }
-                completion.cacheStats?.let(cache::record)
-                completion.content
-            }
+            completion.cacheStats?.let(cache::record)
+            val replyText = completion.content
 
             phase = "解析回复"
             val parsed = AiCommandParser.parse(replyText)
