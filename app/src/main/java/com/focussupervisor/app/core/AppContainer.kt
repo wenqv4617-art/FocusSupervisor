@@ -3,6 +3,7 @@ package com.focussupervisor.app.core
 import android.content.Context
 import com.focussupervisor.app.core.ai.ConversationEngine
 import com.focussupervisor.app.core.ai.LocalEmbeddingEngine
+import com.focussupervisor.app.core.ai.LocalLlmClient
 import com.focussupervisor.app.core.ai.ProactiveSupervisor
 import com.focussupervisor.app.core.backup.BackupManager
 import com.focussupervisor.app.core.network.OpenAiCompatibleClient
@@ -26,9 +27,11 @@ import com.focussupervisor.app.data.repository.DataStoreMemoryRepository
 import com.focussupervisor.app.data.repository.DataStorePersonaRepository
 import com.focussupervisor.app.data.repository.DataStoreTimelineRepository
 import com.focussupervisor.app.data.repository.DefaultDataMaintenanceRepository
+import com.focussupervisor.app.data.repository.DefaultLocalLlmRepository
 import com.focussupervisor.app.data.repository.DefaultLocalModelRepository
 import com.focussupervisor.app.data.repository.GazeRepository
 import com.focussupervisor.app.data.repository.InMemoryPromptCacheRepository
+import com.focussupervisor.app.data.repository.LocalLlmRepository
 import com.focussupervisor.app.data.repository.LocalModelRepository
 import com.focussupervisor.app.data.repository.MemoryRepository
 import com.focussupervisor.app.data.repository.PersonaRepository
@@ -176,6 +179,22 @@ class AppContainer(context: Context) {
         engine = localEmbedding,
     )
 
+    /**
+     * 端侧对话模型引擎（MediaPipe GenAI）。
+     *
+     * 与 [localEmbedding] 不同，它一加载就是 0.5~4GB —— 占的是「这台手机还能不能
+     * 正常用」的量级。所以它比向量引擎更需要显式释放：切换模型、切回云端、
+     * 删除模型三处都会调 [LocalLlmClient.release]。
+     */
+    val localLlmEngine: LocalLlmClient = LocalLlmClient(appContext)
+
+    /** 端侧对话模型：下载、校验、加载、跑分。 */
+    val localLlm: LocalLlmRepository = DefaultLocalLlmRepository(
+        context = appContext,
+        scope = appScope,
+        engine = localLlmEngine,
+    )
+
     /** 数据管理：备份导出与恢复。 */
     val backup: BackupManager = BackupManager(appContext)
 
@@ -223,6 +242,7 @@ class AppContainer(context: Context) {
         cache = promptCache,
         gaze = gaze,
         localModel = localModel,
+        localLlm = localLlm,
     )
 
     /**

@@ -170,6 +170,16 @@ dependencies {
     // 运行时装一个 native 库是做不到的。体积代价见 libs.versions.toml 的注释。
     implementation(libs.onnxruntime.android)
 
+    // ---- 端侧对话模型 --------------------------------------------------------
+    // MediaPipe GenAI 的 LLM Inference：跑下载到本机的 .task 模型。
+    // 只吃 .task（LiteRT 打包格式），不吃 GGUF —— 那是 llama.cpp 的格式。
+    implementation(libs.mediapipe.tasks.genai)
+
+    // ---- 端侧识图（备选 A：中文 OCR）------------------------------------------
+    // 模型打包版，不依赖 Google Play 服务。约 +10MB 原生组件，
+    // 换来的是「完全离线的屏幕文字理解」。
+    implementation(libs.mlkit.text.recognition.chinese)
+
     // ---- 生命周期 / ViewModel ----------------------------------------------
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.runtime.compose)   // collectAsStateWithLifecycle

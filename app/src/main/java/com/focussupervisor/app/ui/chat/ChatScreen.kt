@@ -63,6 +63,7 @@ import com.focussupervisor.app.domain.model.BackgroundMode
 import com.focussupervisor.app.domain.model.ChatAppearance
 import com.focussupervisor.app.domain.model.ChatDialog
 import com.focussupervisor.app.domain.model.ChatMessage
+import com.focussupervisor.app.domain.model.MessageSender
 import com.focussupervisor.app.domain.model.ChatUiState
 import com.focussupervisor.app.domain.model.PermissionTarget
 import com.focussupervisor.app.domain.model.PersonaPair
@@ -256,6 +257,7 @@ fun ChatScreen(
             onMessageLongPress = onMessageLongPress,
             contentPadding = scaffoldPadding,
             appearance = appearance,
+            streamingText = uiState.streamingText,
         )
     }
 
@@ -423,12 +425,27 @@ private fun MessageList(
     onMessageLongPress: (ChatMessage) -> Unit,
     contentPadding: PaddingValues,
     appearance: ChatAppearance,
+    streamingText: String?,
 ) {
     val listState = rememberLazyListState()
 
-    LaunchedEffect(messages.size) {
-        if (messages.isNotEmpty()) {
-            listState.animateScrollToItem(messages.lastIndex)
+    // 滚动跟着「最后一项的索引」走。
+    //
+    // 之前用 messages.size 当 key，端侧流式输出时会有问题：那条临时气泡**不是消息**，
+    // 它变长时 messages.size 一动不动，于是气泡长到屏幕外了而列表不跟着滚。
+    // 把流式状态也算进 key，两种情况一起覆盖。
+    val lastIndex = messages.size + if (streamingText != null) 1 else 0
+    LaunchedEffect(lastIndex) {
+        if (lastIndex > 0) {
+            listState.animateScrollToItem(lastIndex - 1)
+        }
+    }
+
+    // 流式增长时也要跟着滚，但用 scrollTo 而不是 animateScrollTo：
+    // 每来一个分片就启动一次动画，会把上一个动画打断，观感是一跳一跳的。
+    LaunchedEffect(streamingText?.length) {
+        if (streamingText != null && lastIndex > 0) {
+            listState.scrollToItem(lastIndex - 1)
         }
     }
 
@@ -469,11 +486,41 @@ private fun MessageList(
                             onLongPress = onMessageLongPress,
                         )
                     }
+
+                    // 正在流式产出的临时气泡。
+                    //
+                    // 它不是一条消息：没有 id、不进仓库、不会落盘，长按也没有反应
+                    // （对一条还不存在的东西做「编辑 / 删除」是没有意义的）。
+                    // 生成结束后引擎会把正式消息写进仓库，这条随即消失 ——
+                    // 用户看到的是「打字气泡变成正式气泡」，中间不会闪。
+                    if (streamingText != null) {
+                        item(key = STREAMING_ITEM_KEY) {
+                            MessageBubble(
+                                message = ChatMessage(
+                                    id = STREAMING_ITEM_KEY,
+                                    sender = MessageSender.AI,
+                                    text = streamingText.ifEmpty { "正在生成…" },
+                                    timestampMillis = System.currentTimeMillis(),
+                                ),
+                                personas = personas,
+                                onLongPress = {},
+                            )
+                        }
+                    }
                 }
             }
         }
     }
 }
+
+/**
+ * 流式临时气泡的稳定 key。
+ *
+ * 用一个不可能与真实消息相撞的字符串：真实消息的 id 是 UUID，
+ * 而这个 key 一旦与某条真实消息相同，Compose 会把那个 item 当成同一条来复用，
+ * 表现是那条历史消息在生成期间突然变成打字气泡。
+ */
+private const val STREAMING_ITEM_KEY = "__streaming__"
 
 /**
  * 聊天区背景层。

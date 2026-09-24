@@ -142,6 +142,8 @@ internal object PreferencesCodec {
                     put(FIELD_TEMPERATURE, preset.config.temperature.toDouble())
                     // 前置提示可能很长且含换行，JSON 会自己转义，不需要特殊处理。
                     put(FIELD_PRE_PROMPT, preset.config.prePrompt)
+                    put(FIELD_AI_USE_LOCAL, preset.config.useLocalModel)
+                    put(FIELD_AI_LOCAL_MODEL, preset.config.localModelId)
                 },
             )
         }
@@ -162,6 +164,10 @@ internal object PreferencesCodec {
                     AiConfig.DEFAULT_TEMPERATURE.toDouble(),
                 ).toFloat(),
                 prePrompt = obj.optString(FIELD_PRE_PROMPT),
+                // 老数据里没有这两个字段，默认值正好是「继续用云端端点」，
+                // 也就是升级前后行为完全一致。
+                useLocalModel = obj.optBoolean(FIELD_AI_USE_LOCAL, false),
+                localModelId = obj.optString(FIELD_AI_LOCAL_MODEL),
             ),
         )
     }
@@ -631,6 +637,12 @@ internal object PreferencesCodec {
     private const val FIELD_PITCH = "pitchToleranceDegrees"
     private const val FIELD_EYE_OPEN = "eyeOpenThreshold"
     private const val FIELD_USE_LOCAL_MODEL = "useLocalModel"
+
+    // ---- 对话端点是否走端侧模型。刻意与向量那边的 useLocalModel 用不同的键名，
+    //      两者的含义与生命周期都不一样，键名混用会让「备份文件里那个 useLocalModel
+    //      到底是哪个」变成需要翻代码才能回答的问题。
+    private const val FIELD_AI_USE_LOCAL = "aiUseLocalModel"
+    private const val FIELD_AI_LOCAL_MODEL = "aiLocalModelId"
 
     // ---- 聊天页外观 ---------------------------------------------------------
     private const val FIELD_PRESET_ID = "presetId"

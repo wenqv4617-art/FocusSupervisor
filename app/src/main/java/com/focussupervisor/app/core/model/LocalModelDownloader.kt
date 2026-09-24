@@ -16,6 +16,26 @@ import java.io.IOException
 import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
 
+/**
+ * 一次下载需要的全部信息。
+ *
+ * 抽成通用契约，是因为现在要下的东西不止一类：向量模型、对话模型、将来还有
+ * 识图模型。它们的下载逻辑**完全一样**（断点续传、进度上报、SHA-256 校验、
+ * 临时文件改名），只有「下什么」不同。为每一类复制一份下载器，
+ * 等于把上面那四件事各写三遍 —— 而其中任何一处写漏了都不会报错，
+ * 只会表现为「某个模型的下载偶尔是坏的」。
+ *
+ * @param fileName 落盘文件名。带扩展名，因为它同时是「临时文件叫什么」的依据。
+ * @param sha256 期望摘要。**留空表示跳过校验**，用于用户自定义模型 ——
+ *        算摘要对普通用户门槛太高。跳过的情形界面必须一直显示「未校验」。
+ */
+data class DownloadSpec(
+    val fileName: String,
+    val url: String,
+    val sizeBytes: Long,
+    val sha256: String,
+)
+
 /** 下载过程中的一次进度上报。 */
 data class DownloadProgress(
     /** 已经落盘的字节数（含断点续传时已有的部分）。 */
@@ -88,30 +108,44 @@ class LocalModelDownloader(private val client: OkHttpClient = defaultClient()) {
     fun download(
         model: LocalEmbeddingModel,
         targetDirectory: File,
+    ): Flow<DownloadProgress> = download(
+        spec = DownloadSpec(
+            fileName = model.fileName,
+            url = model.downloadUrl,
+            sizeBytes = model.sizeBytes,
+            sha256 = model.sha256,
+        ),
+        targetDirectory = targetDirectory,
+    )
+
+    /** 通用下载入口。所有模型资源都走这一条。 */
+    fun download(
+        spec: DownloadSpec,
+        targetDirectory: File,
     ): Flow<DownloadProgress> = flow {
         if (!targetDirectory.exists() && !targetDirectory.mkdirs()) {
             throw IOException("无法创建模型目录：${targetDirectory.absolutePath}")
         }
 
-        val target = File(targetDirectory, model.fileName)
-        if (target.isFile && target.length() == model.sizeBytes) {
+        val target = File(targetDirectory, spec.fileName)
+        if (target.isFile && target.length() == spec.sizeBytes) {
             // 已经下过了。直接进入校验，不重新下 —— 用户点了「下载」但文件其实
             // 早就在，这种情况（比如上次下完没刷新界面）应该瞬间完成而不是再等一分钟。
-            emit(DownloadProgress(model.sizeBytes, model.sizeBytes, 0, 0))
-            verifyOrThrow(target, model)
+            emit(DownloadProgress(spec.sizeBytes, spec.sizeBytes, 0, 0))
+            verifyOrThrow(target, spec)
             return@flow
         }
 
-        val partial = File(targetDirectory, "${model.fileName}.part")
+        val partial = File(targetDirectory, "${spec.fileName}.part")
         var existing = partial.length()
-        if (existing > model.sizeBytes) {
+        if (existing > spec.sizeBytes) {
             // 临时文件比目标还大，说明之前写坏了。丢掉重来。
             partial.delete()
             existing = 0
         }
 
         val request = Request.Builder()
-            .url(model.downloadUrl)
+            .url(spec.url)
             .apply { if (existing > 0) header("Range", "bytes=$existing-") }
             .build()
 
@@ -122,7 +156,7 @@ class LocalModelDownloader(private val client: OkHttpClient = defaultClient()) {
 
             val resumed = response.code == HTTP_PARTIAL_CONTENT
             val complete = response.code == HTTP_RANGE_NOT_SATISFIABLE ||
-                (resumed && existing >= model.sizeBytes)
+                (resumed && existing >= spec.sizeBytes)
 
             if (!complete) {
                 // 服务端不支持续传（200）时，临时文件里的内容就作废了，
@@ -137,7 +171,7 @@ class LocalModelDownloader(private val client: OkHttpClient = defaultClient()) {
                 // 拿不到就退回模型声明的总大小。
                 val total = when {
                     body.contentLength() > 0 -> existing + body.contentLength()
-                    else -> model.sizeBytes
+                    else -> spec.sizeBytes
                 }
 
                 FileOutputStream(partial, resumed && existing > 0).use { output ->
@@ -193,7 +227,7 @@ class LocalModelDownloader(private val client: OkHttpClient = defaultClient()) {
             }
         }
 
-        verifyOrThrow(partial, model)
+        verifyOrThrow(partial, spec)
 
         if (target.exists() && !target.delete()) {
             throw IOException("无法覆盖旧的模型文件")
@@ -209,17 +243,17 @@ class LocalModelDownloader(private val client: OkHttpClient = defaultClient()) {
      * 摘要对不上时**删掉**而不是留着：留着一个坏文件，下次续传会从一个错误的
      * 位置接着写，永远也下不完。
      */
-    private fun verifyOrThrow(file: File, model: LocalEmbeddingModel) {
+    private fun verifyOrThrow(file: File, spec: DownloadSpec) {
         if (!file.isFile) throw IOException("模型文件不存在")
 
-        if (model.sizeBytes > 0 && file.length() != model.sizeBytes) {
+        if (spec.sizeBytes > 0 && file.length() != spec.sizeBytes) {
             file.delete()
-            throw IOException("模型文件不完整（已下载 ${file.length()} 字节，应为 ${model.sizeBytes}）")
+            throw IOException("模型文件不完整（已下载 ${file.length()} 字节，应为 ${spec.sizeBytes}）")
         }
 
-        if (model.sha256.isNotBlank()) {
+        if (spec.sha256.isNotBlank()) {
             val actual = sha256Of(file)
-            if (!actual.equals(model.sha256, ignoreCase = true)) {
+            if (!actual.equals(spec.sha256, ignoreCase = true)) {
                 file.delete()
                 throw IOException("模型文件校验失败，请重试下载")
             }
@@ -247,12 +281,19 @@ class LocalModelDownloader(private val client: OkHttpClient = defaultClient()) {
     }
 
     /** 已下载但还没校验的临时文件。界面用来显示「上次下到一半」。 */
-    fun partialFile(model: LocalEmbeddingModel, directory: File): File =
-        File(directory, "${model.fileName}.part")
+    fun partialFile(fileName: String, directory: File): File =
+        File(directory, "$fileName.part")
 
     /** 已下载完成的模型文件。 */
+    fun installedFile(fileName: String, directory: File): File =
+        File(directory, fileName)
+
+    /** 向量模型专用的两个便捷重载。 */
+    fun partialFile(model: LocalEmbeddingModel, directory: File): File =
+        partialFile(model.fileName, directory)
+
     fun installedFile(model: LocalEmbeddingModel, directory: File): File =
-        File(directory, model.fileName)
+        installedFile(model.fileName, directory)
 
     companion object {
         private const val TAG = "LocalModelDownloader"

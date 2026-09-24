@@ -137,12 +137,26 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 inputText = "",
                 isActionPanelVisible = false,
                 isSending = true,
+                // 从空串开始，而不是 null：null 表示「没有在流式」，
+                // 而这里的意思恰恰是「马上要开始了」。先置空串，界面就会立刻
+                // 出现一个空的打字气泡，用户马上知道「它在生成了」——
+                // 端侧模型首字要等半秒到两秒，这段等待必须有个东西在动。
+                streamingText = "",
             )
         }
 
         viewModelScope.launch {
-            val outcome = engine.send(draft)
-            _uiState.update { it.copy(isSending = false) }
+            // 流式分片只做字符串拼接。真正的渲染交给 Compose，
+            // 这里不做任何格式化、不碰时间戳 —— 那会让每一片都重组一次列表。
+            val outcome = engine.send(draft) { delta ->
+                _uiState.update { state ->
+                    state.copy(streamingText = (state.streamingText ?: "") + delta)
+                }
+            }
+
+            // 生成结束：清掉临时气泡。真正的那条消息此时已经在仓库里了，
+            // 界面上下一条重组就会把它显示出来。
+            _uiState.update { it.copy(isSending = false, streamingText = null) }
 
             // 「还没配置端点」是个高频且可自愈的失败：直接把配置面板弹出来，
             // 比让用户自己去「+」里翻要少两步。

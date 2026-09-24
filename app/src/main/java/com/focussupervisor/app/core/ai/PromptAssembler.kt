@@ -478,7 +478,7 @@ object PromptAssembler {
                 tailTurn?.let { add(it) }
             }
             if (TokenEstimator.estimate(candidate) <= budget) {
-                if (dropped > 0 && BuildDebug.LOG_BUDGET) {
+                if (dropped > 0 && LOG_BUDGET_TRIM) {
                     Log.i(TAG, "${profile.displayName}：预算 $budget，丢弃历史 $dropped 条")
                 }
                 return candidate

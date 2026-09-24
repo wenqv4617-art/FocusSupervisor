@@ -35,9 +35,24 @@ data class AiConfig(
     val model: String,
     val temperature: Float,
     val prePrompt: String = "",
+    /**
+     * 是否改用**下载到本机的**对话模型（MediaPipe 端侧推理）。
+     *
+     * 与向量模型那边一样，这是**互斥的两条路**，不做自动回退：
+     * 端侧模型一旦就绪就是离线的、不花钱的、数据不出手机的，用户明确选了它就该只走它。
+     * 偷偷回退到云端会让「我明明关了网它怎么还能回话」变成一个无法解释的现象 ——
+     * 而对一个自律监督应用来说，那是最不该出现的疑问。
+     */
+    val useLocalModel: Boolean = false,
+    /** 选中的端侧模型 id，见 `LocalLlmModels`。留空表示用推荐档。 */
+    val localModelId: String = "",
 ) {
-    /** 是否已经填够了发起请求所需的最小信息。 */
+    /** 是否已经填够了发起请求所需的最小信息（端侧路径不要求 URL 与模型名）。 */
     val isUsable: Boolean
+        get() = if (useLocalModel) true else isRemoteUsable
+
+    /** 云端端点是否配置完整。 */
+    val isRemoteUsable: Boolean
         get() = baseUrl.isNotBlank() && model.isNotBlank()
 
     companion object {
