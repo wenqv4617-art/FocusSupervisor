@@ -42,6 +42,8 @@ import com.focussupervisor.app.domain.model.GazeConfig
 import com.focussupervisor.app.domain.model.GazeDefaults
 import com.focussupervisor.app.domain.model.GazeState
 import com.focussupervisor.app.domain.model.TimelineKind
+import com.focussupervisor.app.domain.model.VisionConfig
+import com.focussupervisor.app.domain.model.VisionSource
 import com.focussupervisor.app.domain.model.VisionStatus
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob

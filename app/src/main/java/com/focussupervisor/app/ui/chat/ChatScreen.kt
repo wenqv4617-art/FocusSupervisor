@@ -812,6 +812,8 @@ private fun ChatScreenPanelExpandedPreview() {
             onMessageDeleteConfirm = {},
             onAppearanceDismiss = {},
             onDataManageDismiss = {},
+            onOpenResources = {},
+            onResourceSheetDismiss = {},
         )
     }
 }

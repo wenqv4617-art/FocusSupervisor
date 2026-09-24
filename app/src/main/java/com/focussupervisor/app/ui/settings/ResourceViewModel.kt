@@ -276,9 +276,11 @@ class ResourceViewModel(application: Application) : AndroidViewModel(application
     fun activateLlm(item: ResourceItem) {
         llmRepo.select(item.id)
         viewModelScope.launch {
+            // 用 updateActiveConfig 而不是「取出配置 → copy → 存回去」：
+            // 后者要先取一次快照，而用户在跑分、下载这些耗时操作期间完全可能
+            // 改了别的东西（前置提示、温度），用旧快照写回去会静默覆盖掉那处改动。
+            // 这个方法是就地改，只动我们指定的两个字段。
             val saved = container.aiConfig.updateActiveConfig { current ->
-                // 从仓库里重新取一次 current，而不是用上面那个 config 快照：
-                // 用户可能在跑分期间改了别的东西，用快照会把那处改动覆盖掉。
                 current.copy(useLocalModel = true, localModelId = item.id)
             }
             _uiState.update {

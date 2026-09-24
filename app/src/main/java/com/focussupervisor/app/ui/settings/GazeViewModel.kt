@@ -105,6 +105,46 @@ class GazeViewModel(application: Application) : AndroidViewModel(application) {
     // 观测
     // -----------------------------------------------------------------------
 
+    /**
+     * 本地识图的测试。
+     *
+     * 成功之后往会话流里留一条系统胶囊，把**真实的测试输出**贴出来 ——
+     * 只说一句「测试成功」等于什么都没验证：用户没法判断这套提炼在他这台机器上
+     * 到底读出了什么。胶囊里带上摘要，他立刻就能看出这个引擎认不认他的屏幕。
+     */
+    private fun testLocalVisionEngine(draft: VisionConfig) {
+        testJob?.cancel()
+        testJob = viewModelScope.launch {
+            _uiState.update { it.copy(isTesting = true, message = null) }
+
+            val result = localVision.selfTest(
+                kind = draft.localEngine,
+                maxChars = LOCAL_VISION_TEST_MAX_CHARS,
+            )
+
+            _uiState.update { state ->
+                result.fold(
+                    onSuccess = { summary ->
+                        policy.publishNotice("本地视觉引擎测试成功，摘要：$summary")
+                        state.copy(
+                            isTesting = false,
+                            message = "本地识图可用，摘要：$summary",
+                            isMessageError = false,
+                        )
+                    },
+                    onFailure = { throwable ->
+                        state.copy(
+                            isTesting = false,
+                            message = throwable.message?.takeIf { it.isNotBlank() }
+                                ?: "本地识图测试失败",
+                            isMessageError = true,
+                        )
+                    },
+                )
+            }
+        }
+    }
+
     private fun observeGaze() {
         viewModelScope.launch {
             gaze.config.collect { config ->
