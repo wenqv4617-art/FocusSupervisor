@@ -21,12 +21,15 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleService
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import com.focussupervisor.app.FocusSupervisorApp
 import com.focussupervisor.app.MainActivity
 import com.focussupervisor.app.R
 import com.focussupervisor.app.appContainer
 import com.focussupervisor.app.core.network.OpenAiCompatibleClient
 import com.focussupervisor.app.core.time.TimeNarrator
+import com.focussupervisor.app.core.vision.LocalVisionEngine
 import com.focussupervisor.app.core.vision.GazeAnalyzer
 import com.focussupervisor.app.core.vision.GazeEstimator
 import com.focussupervisor.app.core.vision.GazeReading
@@ -41,7 +44,6 @@ import com.focussupervisor.app.domain.model.GazeState
 import com.focussupervisor.app.domain.model.TimelineKind
 import com.focussupervisor.app.domain.model.VisionStatus
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
@@ -84,6 +86,9 @@ class FocusMonitorService : LifecycleService() {
     private lateinit var gaze: GazeRepository
     private lateinit var aiConfig: AiConfigRepository
     private lateinit var client: OpenAiCompatibleClient
+
+    /** 端侧识图引擎。与 [client] 二选一，由配置里的来源决定走哪条。 */
+    private lateinit var localVision: LocalVisionEngine
     private lateinit var timeline: TimelineRepository
     private lateinit var policy: AppPolicyRepository
 
@@ -166,6 +171,7 @@ class FocusMonitorService : LifecycleService() {
         gaze = container.gaze
         aiConfig = container.aiConfig
         client = container.openAiClient
+        localVision = container.localVision
         timeline = container.timeline
         policy = container.policy
 
@@ -511,7 +517,17 @@ class FocusMonitorService : LifecycleService() {
                 return@launch
             }
 
-            client.describeImage(vision, vision.prompt, jpeg)
+            // 识图分两条路，与配置里的来源严格一致，不自动回退。
+            //
+            // 本地路径要把 JPEG 解成 Bitmap 交给 ML Kit —— 这一步必须在后台线程，
+            // 而且解码一张 1080 宽的截图是几十毫秒的活，绝不能出现在主线程上。
+            val result = if (vision.source == VisionSource.LOCAL) {
+                describeLocally(vision, jpeg)
+            } else {
+                client.describeImage(vision, vision.prompt, jpeg)
+            }
+
+            result
                 .onSuccess { description ->
                     val text = description.trim().take(GazeDefaults.MAX_DESCRIPTION_LENGTH)
                     if (text.isEmpty()) {
@@ -656,8 +672,44 @@ class FocusMonitorService : LifecycleService() {
         ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) ==
             PackageManager.PERMISSION_GRANTED
 
+    /**
+     * 本地识图：JPEG → Bitmap → 端侧引擎 → 一句事实。
+     *
+     * 解码放在 [Dispatchers.Default]：一张 1080 宽的截图解码出来是几 MB，
+     * 而这段代码跑在注视监控的前台服务里 —— 主线程在这里卡一下，表现就是整个界面
+     * 明显掉帧，而用户完全不知道是谁干的。
+     */
+    private suspend fun describeLocally(
+        config: VisionConfig,
+        jpeg: ByteArray,
+    ): Result<String> = withContext(Dispatchers.Default) {
+        val bitmap = runCatching {
+            android.graphics.BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size)
+        }.getOrNull() ?: return@withContext Result.failure(
+            IllegalStateException("截图解码失败"),
+        )
+
+        try {
+            localVision.describe(
+                bitmap = bitmap,
+                kind = config.localEngine,
+                prompt = config.prompt,
+                // 摘要长度固定 40 字：那段文字最终要塞进提示词，
+                // 而端侧档位的预算只有 1500 token，摘要不该占掉明显一块。
+                maxChars = LOCAL_VISION_MAX_SUMMARY_CHARS,
+            )
+        } finally {
+            // 几 MB 的位图，用完立刻回收。注视监控是周期性的，
+            // 攒几张等 GC 就足以在低端机上造成可感知的卡顿。
+            if (!bitmap.isRecycled) bitmap.recycle()
+        }
+    }
+
     companion object {
         private const val TAG = "FocusMonitorService"
+
+        /** 本地识图产出的摘要长度上限。 */
+        private const val LOCAL_VISION_MAX_SUMMARY_CHARS = 40
 
         /**
          * 常驻通知的 id。
